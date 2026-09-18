@@ -1,7 +1,8 @@
 import base64
+import contextlib
 import json
 import logging
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from typing import Any, Dict, List, Optional, Union
 
 from .config import AKConfig
@@ -20,7 +21,7 @@ from .model import (
     StreamChunk,
 )
 from .service import AgentService
-from .util.async_bridge import run_async_sync
+from .util.async_bridge import iterate_async_sync, run_async_sync
 
 
 class RequestBuilder:
@@ -234,6 +235,18 @@ class AgentHandler:
         """
         return run_async_sync(coro)
 
+    @staticmethod
+    def _iterate_async_sync(agen) -> Iterator[Any]:
+        """Consume an async generator from sync code, handling event loop state.
+
+        The streaming sibling of _run_async_sync, and a method for the same reason: callers
+        (and their tests) reach the bridge through the handler.
+
+        :param agen: Async generator to consume
+        :return: Iterator over the generator's items
+        """
+        return iterate_async_sync(agen)
+
     def run_sync(self, requests: List[Any], acting_user_id: Optional[str] = None) -> Any:
         """Run agent requests synchronously.
 
@@ -252,23 +265,17 @@ class AgentHandler:
         """
         return await self.service.run_multi(requests=requests, acting_user_id=acting_user_id)
 
-    def run_stream_sync(self, requests: List[Any], acting_user_id: Optional[str] = None) -> List[Any]:
+    def run_stream_sync(self, requests: List[Any], acting_user_id: Optional[str] = None) -> Iterator[Any]:
         """Run agent streaming requests synchronously.
 
-        Manages event loop lifecycle internally and returns all chunks as a list.
+        Manages event loop lifecycle internally and hands over each chunk as the run produces
+        it, so a sync consumer streams live instead of receiving the whole run at once.
 
         :param requests: List of AgentRequest objects to process
         :param acting_user_id: When given, published as the run's acting user (see Runtime.stream)
-        :return: List of StreamChunk objects
+        :return: Iterator of StreamChunk objects
         """
-
-        async def _collect():
-            chunks = []
-            async for chunk in self.service.stream_multi(requests=requests, acting_user_id=acting_user_id):
-                chunks.append(chunk)
-            return chunks
-
-        return AgentHandler._run_async_sync(_collect())
+        return AgentHandler._iterate_async_sync(self.service.stream_multi(requests=requests, acting_user_id=acting_user_id))
 
     async def run_stream_async(self, requests: List[Any], acting_user_id: Optional[str] = None) -> AsyncGenerator[Any, None]:
         """Run agent streaming requests asynchronously.
@@ -437,8 +444,9 @@ class ChatService:
     def execute_stream_sync(self, req: BaseRunRequest, requests: Optional[List[AgentRequest]] = None) -> Generator[StreamChunk, None, None]:
         """Synchronous counterpart of execute_stream().
 
-        Preserves the sync path's buffering semantics: AgentHandler.run_stream_sync collects
-        all chunks before this generator yields the first one.
+        Chunks arrive as the run produces them: AgentHandler.run_stream_sync pumps the async
+        stream one chunk at a time, so an exception mid-run reaches the caller as an error
+        chunk after the chunks already yielded, exactly as on the async path.
 
         :param req: Run request carrying prompt, agent, and session_id
         :param requests: Optional prebuilt AgentRequest list (see execute())
@@ -453,11 +461,12 @@ class ChatService:
         handler = self.prepare_agent_handler(req.session_id, req.agent)
 
         def _stream() -> Generator[StreamChunk, None, None]:
-            try:
-                for chunk in handler.run_stream_sync(requests, acting_user_id=req.user_id):
-                    yield chunk
-            except Exception as e:
-                yield StreamChunk(error=str(e), done=True)
+            with contextlib.closing(handler.run_stream_sync(requests, acting_user_id=req.user_id)) as chunks:
+                try:
+                    for chunk in chunks:
+                        yield chunk
+                except Exception as e:
+                    yield StreamChunk(error=str(e), done=True)
 
         return _stream()
 
@@ -657,12 +666,13 @@ class ChatService:
         chunks = self.execute_stream_sync(req, requests)
 
         def _stream() -> Generator[str, None, None]:
-            try:
-                for chunk in chunks:
-                    yield ResponseBuilder.stream_chunk(chunk, session_id, sse_format=sse_format)
-            except Exception as e:
-                error_chunk = StreamChunk(error=str(e), done=True)
-                yield ResponseBuilder.stream_chunk(error_chunk, session_id, sse_format=sse_format)
+            with contextlib.closing(chunks) as raw_chunks:
+                try:
+                    for chunk in raw_chunks:
+                        yield ResponseBuilder.stream_chunk(chunk, session_id, sse_format=sse_format)
+                except Exception as e:
+                    error_chunk = StreamChunk(error=str(e), done=True)
+                    yield ResponseBuilder.stream_chunk(error_chunk, session_id, sse_format=sse_format)
 
         return _stream()
 
