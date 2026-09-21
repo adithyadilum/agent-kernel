@@ -48,6 +48,7 @@ module "serverless_agents" {
     lambda_package_s3    = var.request_handler_lambda_package_s3
     memory_size          = 256
     timeout              = 45
+    security_group_id    = var.request_handler_security_group_id
     environment_variables = {
       "OPENAI_API_KEY" = var.openai_api_key
     }
@@ -62,6 +63,7 @@ module "serverless_agents" {
     handler_path         = "lambda_agent_runner.handler"
     package_type         = "Image"
     ecr_image_uri        = var.agent_runner_ecr_image_uri
+    security_group_id    = var.agent_runner_security_group_id
     environment_variables = {
       "OPENAI_API_KEY" = var.openai_api_key
     }
@@ -76,6 +78,7 @@ module "serverless_agents" {
     handler_path         = "lambda_response_handler.handler"
     lambda_package_s3    = var.response_handler_lambda_package_s3
     package_type         = "S3Zip"
+    security_group_id    = var.response_handler_security_group_id
   }
 
   # Queue configuration for scalable processing

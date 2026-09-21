@@ -145,7 +145,7 @@ resource "aws_iam_policy" "dynamodb_schedule_policy" {
 # Security Groups
 
 resource "aws_security_group" "ecs_alb" {
-    count       = var.alb_security_group_id == null ? 1 : 0
+  count       = var.alb_security_group_id == null ? 1 : 0
   name        = "${var.prefix}-ecs-alb-sg"
   description = "ALB SG for ECS"
   vpc_id      = var.vpc_id

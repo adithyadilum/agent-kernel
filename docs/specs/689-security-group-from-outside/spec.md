@@ -3,28 +3,15 @@
 Implements `design.md` in this directory: a nullable `security_group_id` variable per logical SG in
 `containerized/modules/rest-service`, `containerized/modules/agent-runner`, and `serverless/state.tf`,
 each following the existing `var.vpc_id` bring-your-own convention (`null` → create as today, non-null →
-use the provided ID and skip creation). No production deployments of these modules exist yet, so no
-Terraform state migration (`moved` blocks) is needed — adding `count` to these resources is a plain
-change.
+use the provided ID and skip creation). The CI base deployment and any registry consumer already have
+Terraform state for these SG resources under their unindexed addresses; adding `count` here without a
+`moved` block causes the next `apply` against that state to attempt a replace instead of a reindex (see
+design.md Motivation). This was raised in review and accepted as a one-time migration rather than
+adding `moved` blocks.
 
 ## Design
 
 ### Shared convention
-
-**Precedent considered.** `common/modules/authorizer` already has a "create or use provided" toggle
-(`authorizer/variables.tf:57-61` — `security_group_ids`, `list(string)`, default `[]`;
-`authorizer/main.tf:39-40` — `count = length(var.security_group_ids) == 0 && length(var.subnet_ids) > 0
-? 1 : 0`; `authorizer/main.tf:121` — `vpc_security_group_ids = length(var.security_group_ids) > 0 ?
-var.security_group_ids : (length(var.subnet_ids) > 0 ? [aws_security_group.authorizer_lambda[0].id] :
-null)`), but that variable is list-shaped because it's this one submodule's own interface — every
-current call site only ever feeds it a single-element list, so `authorizer`'s `variables.tf`/`main.tf`
-need no changes here. The more directly-applicable precedent is the top-level `vpc_id` bring-your-own-VPC
-pattern (`containerized/state.tf:1-9`, `serverless/state.tf:1-13`), which is singular and nullable:
-`variable "vpc_id" { type = string, default = null, description = "VPC ID. If not provided, a new one
-will be created" }`. No `coalesce()` exists anywhere in the repo's `.tf` files (verified by grep). Since
-every SG in scope for this change needs only one ID (confirmed with the requester: all five serverless
-Lambdas share exactly one SG; each `containerized` SG is single-purpose), this spec follows the `vpc_id`
-shape — a singular nullable `security_group_id` — rather than `authorizer`'s list shape.
 
 Applied identically at every SG resource touched by this change:
 
