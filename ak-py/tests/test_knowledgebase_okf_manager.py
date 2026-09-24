@@ -17,9 +17,11 @@ No test touches a live bucket or a network: every store here is a LocalDocumentS
 tmp_path, sometimes subclassed to count or to fail.
 """
 
+import re
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
@@ -164,6 +166,22 @@ class FakeClock:
         self.now += seconds
 
 
+class SteppingCalendar:
+    """Stands in for the manager module's ``datetime``, so the ``generated.at`` stamp is not
+    wall-clock bound. Each call to ``now()`` returns the next instant and then holds the last."""
+
+    def __init__(self, *instants) -> None:
+        self._instants = list(instants)
+
+    def now(self, tz=None):
+        return self._instants.pop(0) if len(self._instants) > 1 else self._instants[0]
+
+
+def without_stamp(document: str) -> str:
+    """Blank the one line a re-write is allowed to change, so the rest can be compared."""
+    return re.sub(r"^  at: .*$", "  at: <stamp>", document, flags=re.MULTILINE)
+
+
 class TestCapabilities:
     def test_capabilities_are_built_from_the_store_it_was_handed(self, tmp_path):
         capabilities = make_manager(tmp_path).capabilities
@@ -176,11 +194,13 @@ class TestCapabilities:
         store = LocalDocumentStore(write_bundle(tmp_path, BUNDLE), writable=False)
         assert OKFManager(store).capabilities.writable is False
 
-    def test_declaring_no_query_language_routes_read_to_search(self, tmp_path):
+    def test_relevance_is_the_only_read_shaped_operation_declared(self, tmp_path):
+        # OKF ranks; it has no query language. read_kb therefore routes to search() here,
+        # which is asserted where that routing lives, in test_knowledgebase_builder.py.
         manager = make_manager(tmp_path)
+        assert manager.capabilities.search is True
         assert manager.capabilities.query is False
         assert manager.capabilities.query_language is None
-        assert ids(manager.read("customers")) == ids(manager.search("customers"))
 
     def test_the_backend_name_falls_back_to_okf(self, tmp_path):
         assert make_manager(tmp_path).backend_name == "okf"
@@ -331,6 +351,34 @@ class TestBrowse:
     def test_a_curated_listing_is_never_truncated_by_limit(self, tmp_path):
         assert len(make_manager(tmp_path).browse("tables", limit=0)) == 1
 
+    def test_concepts_survive_a_directory_holding_more_subdirectories_than_the_limit(self, tmp_path):
+        # Subdirectories are listed first, so a flat truncation hid every concept here and told
+        # the agent the namespace held nothing it could read.
+        files = {f"d{n:02d}/x.md": ORDERS_DB for n in range(10)}
+        files["note.md"] = ORDERS_DB
+        records = ids(make_manager(tmp_path, files).browse("", limit=4))
+
+        assert "note.md" in records
+        assert len(records) == 4
+
+    def test_each_kind_is_guaranteed_half_the_budget_when_neither_fits(self, tmp_path):
+        files = {f"d{n:02d}/x.md": ORDERS_DB for n in range(10)}
+        files.update({f"n{n:02d}.md": ORDERS_DB for n in range(10)})
+        records = ids(make_manager(tmp_path, files).browse("", limit=6))
+
+        assert sum(1 for path in records if path.endswith("/")) == 3
+        assert sum(1 for path in records if path.endswith(".md")) == 3
+
+    def test_the_kind_that_fits_entirely_keeps_all_of_it(self, tmp_path):
+        # Halving unconditionally would waste budget: two subdirectories and many concepts
+        # should list both subdirectories and spend everything left on concepts.
+        files = {"d0/x.md": ORDERS_DB, "d1/x.md": ORDERS_DB}
+        files.update({f"n{n:02d}.md": ORDERS_DB for n in range(10)})
+        records = ids(make_manager(tmp_path, files).browse("", limit=6))
+
+        assert sum(1 for path in records if path.endswith("/")) == 2
+        assert sum(1 for path in records if path.endswith(".md")) == 4
+
     def test_a_directory_holding_only_an_index_is_still_listed(self, tmp_path):
         # The manifest infers subdirectories from the paths it holds, and this one contributes
         # no concept path — so without its index.md counting, `notes` could not be reached from
@@ -384,11 +432,94 @@ class TestWrite:
         assert written[0].endswith(".md")
 
     def test_synthesis_falls_back_through_title_then_type_then_a_constant(self, tmp_path):
+        # A body-less write is what reaches the lower rungs now: a concept the backend authors
+        # takes its title, and so its slug, from its own text whenever it has any.
         manager = make_manager(tmp_path)
-        manager.write([{"text": "a", "metadata": {"type": "Attested Computation"}}, {"text": "b", "metadata": {}}])
+        manager.write([{"text": "", "metadata": {"type": "Attested Computation"}}, {"text": "", "metadata": {}}])
         written = ids(manager.browse("generated"))
         assert any(path.startswith("generated/attested-computation-") for path in written)
         assert any(path.startswith("generated/concept-") for path in written)
+
+
+class TestAuthoredConceptTitles:
+    """A concept the backend authors is titled from its own text.
+
+    `write_kb`'s signature carries no title, so every agent-authored concept was an untitled
+    `Note` at `generated/concept-<hex>.md`. Browse and search return summaries rather than
+    bodies, so such a concept rendered as its own path twice and none of the knowledge — the
+    agent that wrote it, and every later reader, had to fetch each generated file to find out
+    what any of them said.
+    """
+
+    def test_an_authored_concept_shows_its_knowledge_in_a_listing(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "The orders table is rebuilt nightly at 02:00 UTC.", "metadata": {"source": "agent"}}])
+
+        listing = manager.format_results(manager.browse("generated"))
+        assert "The orders table is rebuilt nightly at 02:00 UTC." in listing
+
+    def test_the_derived_title_also_gives_the_synthesised_path_a_meaningful_slug(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "Refunds are processed weekly.", "metadata": {}}])
+
+        assert ids(manager.browse("generated"))[0].startswith("generated/refunds-are-processed-weekly-")
+
+    def test_a_caller_supplied_title_is_never_overwritten(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "a long body that is not the title", "metadata": {"title": "Chosen"}}])
+
+        assert manager.fetch(ids(manager.browse("generated")))[0]["metadata"]["title"] == "Chosen"
+
+    def test_a_record_naming_an_id_gains_no_title(self, tmp_path):
+        # The round-trip invariant: a fetched concept written back must gain no frontmatter its
+        # curator did not write, so titling is scoped to the concepts this backend authors.
+        manager = make_manager(tmp_path, {"u.md": "---\ntype: Note\n---\n\nbody\n"}, refresh_seconds=None)
+        manager.write([manager.fetch(["u.md"])[0]])
+
+        assert "title" not in yaml.safe_load((tmp_path / "u.md").read_text(encoding="utf-8").split("---\n")[1])
+
+    def test_a_long_first_line_is_clipped_at_a_word_boundary(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "The warehouse rebuild pipeline reruns every upstream extraction job before it loads anything", "metadata": {}}])
+
+        title = manager.fetch(ids(manager.browse("generated")))[0]["metadata"]["title"]
+        assert title.endswith("…") and len(title) <= 73 and " " not in title[-2:]
+
+    def test_markdown_markers_and_blank_lines_are_not_taken_for_the_title(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "\n\n## Nightly rebuild\n\nbody\n", "metadata": {}}])
+
+        assert manager.fetch(ids(manager.browse("generated")))[0]["metadata"]["title"] == "Nightly rebuild"
+
+    def test_a_body_with_no_words_leaves_the_concept_untitled(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "   \n\n", "metadata": {}}])
+
+        assert "title" not in manager.fetch(ids(manager.browse("generated")))[0]["metadata"]
+
+
+class TestToolTransportKeysAreNotFrontmatter:
+    """`write_kb` carries a backend-specific write statement in `query`/`params`. An OKF bundle
+    has no query language and ignores both, so they are the tool's transport rather than the
+    concept's content — left unreserved they were written into the document as frontmatter,
+    contradicting the tool's own docstring."""
+
+    def test_query_and_params_do_not_reach_the_document(self, tmp_path):
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "a fact", "metadata": {"source": "agent", "query": "MATCH (n) RETURN n", "params": {"a": 1}}}])
+
+        written = ids(manager.browse("generated"))[0]
+        frontmatter = yaml.safe_load((tmp_path / written).read_text(encoding="utf-8").split("---\n")[1])
+        assert not {"query", "params"} & set(frontmatter)
+
+    def test_unknown_metadata_is_still_carried(self, tmp_path):
+        # The reservation is specific: it must not become a general filter on caller extras.
+        manager = make_manager(tmp_path)
+        manager.write([{"text": "a fact", "metadata": {"row_count": 0, "owner": "data-eng"}}])
+
+        written = ids(manager.browse("generated"))[0]
+        frontmatter = yaml.safe_load((tmp_path / written).read_text(encoding="utf-8").split("---\n")[1])
+        assert frontmatter["row_count"] == 0 and frontmatter["owner"] == "data-eng"
 
     def test_a_supplied_id_without_the_markdown_suffix_still_survives_the_next_walk(self, tmp_path):
         # The write-through makes any path visible immediately, so only a rewalk proves the
@@ -428,7 +559,7 @@ class TestWrite:
 
     def test_the_emitted_document_is_conformant_with_a_fixed_key_order(self, tmp_path):
         root = write_bundle(tmp_path, BUNDLE)
-        manager = OKFManager(LocalDocumentStore(root, writable=True), producer="process:demo")
+        manager = OKFManager(LocalDocumentStore(root, writable=True), write_actor="process:demo")
         metadata = {"id": "n.md", "type": "Note", "title": "T", "description": "D", "tags": ["x"], "status": "stable", "owner": "me"}
         manager.write([{"text": "Body.", "metadata": metadata}])
 
@@ -451,7 +582,7 @@ class TestWrite:
 
     def test_the_provenance_stamp_is_the_backends_to_make_not_the_callers(self, tmp_path):
         root = write_bundle(tmp_path, BUNDLE)
-        manager = OKFManager(LocalDocumentStore(root, writable=True), producer="process:demo")
+        manager = OKFManager(LocalDocumentStore(root, writable=True), write_actor="process:demo")
         manager.write([{"text": "x", "metadata": {"id": "g.md", "generated": {"by": "someone-else", "at": "1999-01-01"}}}])
 
         stamped = yaml.safe_load((tmp_path / "g.md").read_text(encoding="utf-8").split("---\n")[1])
@@ -468,7 +599,7 @@ class TestWrite:
         assert "verified" not in (tmp_path / "v.md").read_text(encoding="utf-8")
 
     def test_two_writes_of_the_same_content_differ_only_in_the_generated_stamp(self, tmp_path):
-        manager = make_manager(tmp_path, producer="process:demo")
+        manager = make_manager(tmp_path, write_actor="process:demo")
         record = {"text": "Body.", "metadata": {"id": "n.md", "type": "Note", "title": "T"}}
         manager.write([record])
         first = (tmp_path / "n.md").read_text(encoding="utf-8")
@@ -525,13 +656,23 @@ class TestFetchWriteRoundTrip:
         assert frontmatter["row_count"] == 0
         assert "note" not in frontmatter
 
-    def test_a_round_trip_is_byte_identical_apart_from_the_generated_stamp(self, tmp_path):
-        manager = make_manager(tmp_path, {"t.md": ATTESTED}, refresh_seconds=None, producer="process:demo")
+    def test_a_round_trip_is_byte_identical_apart_from_the_generated_stamp(self, tmp_path, monkeypatch):
+        # The stamp has one-second resolution and is the one field a re-write is allowed to
+        # move, so comparing raw documents passed only while both writes happened to land inside
+        # the same wall-clock second. The clock is stepped across a second boundary here, which
+        # is what the assertion is meant to tolerate and everything else is meant to survive.
+        first_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        monkeypatch.setattr(manager_module, "datetime", SteppingCalendar(first_at, first_at + timedelta(seconds=1)))
+
+        manager = make_manager(tmp_path, {"t.md": ATTESTED}, refresh_seconds=None, write_actor="process:demo")
         manager.write([manager.fetch(["t.md"])[0]])
         first = (tmp_path / "t.md").read_text(encoding="utf-8")
         manager.write([manager.fetch(["t.md"])[0]])
+        second = (tmp_path / "t.md").read_text(encoding="utf-8")
 
-        assert (tmp_path / "t.md").read_text(encoding="utf-8") == first
+        assert without_stamp(second) == without_stamp(first)
+        assert "at: '2024-01-01T00:00:00+00:00'" in first
+        assert "at: '2024-01-01T00:00:01+00:00'" in second
 
     def test_an_untitled_concept_does_not_gain_its_own_path_as_a_title(self, tmp_path):
         # The record's display title used to fall back to the path, which write() then persisted.
@@ -641,6 +782,46 @@ class TestBoundedWalkReads:
 
         assert store.whole_reads == ["big.md"]
         assert ids(manager.search("Padded")) == ["big.md"]
+
+
+class TestUnreadableDocuments:
+    """One file the store refuses costs that file, never the bundle. The walk runs from
+    __init__, so an exception escaping it takes the whole capability down at construction —
+    and the two refusals that matter in production are not related by type: a local file mode
+    raises PermissionError, while an S3 key the pod's role cannot get raises a botocore
+    ClientError, which is no OSError at all."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [PermissionError(13, "Permission denied"), RuntimeError("AccessDenied")],
+        ids=["oserror", "non-oserror"],
+    )
+    def test_an_unreadable_concept_is_a_diagnostic_and_the_rest_of_the_bundle_loads(self, tmp_path, error):
+        class RefusingStore(LocalDocumentStore):
+            def read_prefix_bytes(self, path: str, max_bytes: int) -> bytes:
+                if path == "bad.md":
+                    raise error
+                return super().read_prefix_bytes(path, max_bytes)
+
+        files = {"good.md": "---\ntype: Note\ntitle: Good\n---\n\nbody\n", "bad.md": "---\ntype: Note\n---\n\nbody\n"}
+        manager = OKFManager(RefusingStore(write_bundle(tmp_path, files)))
+
+        assert ids(manager.browse()) == ["good.md"]
+        assert [(d.path, d.code) for d in manager.reload().diagnostics] == [("bad.md", DiagnosticCode.UNREADABLE.value)]
+
+    def test_an_unreadable_index_leaves_the_directory_listable(self, tmp_path):
+        # The whole-read branch of the same guard: a curated listing that cannot be read falls
+        # back to the derived one rather than aborting the walk.
+        class RefusingStore(LocalDocumentStore):
+            def read_bytes(self, path: str) -> bytes:
+                if path == "index.md":
+                    raise PermissionError(13, "Permission denied")
+                return super().read_bytes(path)
+
+        files = {"index.md": "curated listing\n", "a.md": "---\ntype: Note\ntitle: A\n---\n\nbody\n"}
+        manager = OKFManager(RefusingStore(write_bundle(tmp_path, files)))
+
+        assert ids(manager.browse()) == ["a.md"]
 
 
 class TestConcurrentReadsAndWrites:

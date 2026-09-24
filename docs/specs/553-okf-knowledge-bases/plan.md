@@ -17,6 +17,14 @@ Every iteration ends green on `cd ak-py && uv run pytest -k knowledgebase` and o
 `make lint-check-all` (the command `code-quality.yml` runs). Expect unrelated e2e failures on a full
 local `pytest` without CI credentials (`AGENTS.md:103-108`).
 
+**Amended 2026-09-18 — [A2].** Iterations 1-8 are unchanged and land the representation/capability/
+storage work. Five new iterations carry the amendment: **9** removes `read()` and relaxes the
+`search_kb` gate, **10** extends `KnowledgeBuilder`, **11** adds the config block and the role model,
+**12** adds the agent surface, **13** rewrites the example. The docs-and-skills sync **moves from
+iteration 9 to iteration 14** and grows the surfaces the amendment invalidates. Iterations 2 and 3
+carry `[A2]` notes where the amendment later revisits what they build — implement them as written,
+then let iteration 9 supersede those two points, so each iteration stays independently green.
+
 ## Iteration 1: Capability model and errors
 
 - **Goal:** `KnowledgeCapabilities`, the two record `TypedDict`s, and the three error types exist and
@@ -44,11 +52,14 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
   `knowledgebase/starburst.py`, `ak-py/tests/test_knowledgebase_base.py` (new), and the
   `validate_capabilities` half of `ak-py/tests/test_knowledgebase_model.py`.
 - **Steps:**
-  1. `base.py` — `__init__(capabilities, name=None)`, module-level `validate_capabilities`, the five
+  1. `base.py` — `__init__(capabilities, name=None)`, the `validate_capabilities` **static method**, the five
      optional operations, concrete `read()` routing on `capabilities.query`, `_derived_schema()` +
      relaxed `schema()` guard with `capabilities` written last and unoverridable, and the `fetch`-gated
      `format_results` prefix (spec § `knowledgebase/base.py` and its two subsections; addition G).
      `read`/`write` stop being abstract; `backend_name`/`connect`/`get_description` stay abstract.
+     - **[A2]** `read()` is **deleted** in iteration 9. It is still written here because iterations 2-8
+       must each end green, and the tool layer only takes over the routing in iteration 9. Writing it
+       now and removing it then is two small diffs; skipping it leaves iterations 2-8 red.
   2. `chroma.py` — declare `kinds=["vector"], search=True, search_mode="semantic", writable=True`;
      rename `read` → `search`.
   3. `neo4j.py` — declare `kinds=["graph","structured"], query=True, query_language="cypher",
@@ -75,6 +86,8 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
      emitted only on its gate (`search_kb` needs a backend declaring **both** `search` and `query`);
      capability mismatches return the actionable string, never an exception (spec §
      `knowledgebase/knowledgebuilder.py`).
+     - **[A2]** `search_kb`'s gate is relaxed to any `search`-declaring backend in iteration 9, and
+       `build()`/`__init__` gain parameters in iteration 10. Same reasoning as iteration 2's note.
   2. Extend semantic-map resolution to `search_kb` queries, `fetch_kb` ids (per segment, after the `,`
      split) and `browse_kb` paths.
   3. `get_schemas` gains the per-backend `try/except` its sibling already has; `write_kb` stops setting
@@ -88,8 +101,9 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
 
 - **Goal:** bytes at paths, containment enforced in one place, local and S3 stores interchangeable
   through `from_uri`. Nothing consumes it yet.
-- **Files:** `knowledgebase/store/{__init__,base,local,s3}.py` (new), `knowledgebase/testing.py` (new —
-  `DocumentStoreContract` only), `ak-py/tests/test_knowledgebase_stores.py` (new).
+- **Files:** `knowledgebase/store/{__init__,base,local,s3}.py` (new),
+  `knowledgebase/testing.py` (new — `DocumentStoreContract` only),
+  `ak-py/tests/test_knowledgebase_stores.py` (new).
 - **Steps:**
   1. `store/base.py` — the ABC, `normalise_relative` called by every entrypoint and by every path
      `list()` emits, `read_prefix_bytes` with its default, `write_bytes` refusal on a non-writable
@@ -100,8 +114,9 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
      `sorted()` global lexicographic `list()`.
   3. `store/s3.py` — `require_extra("aws", …)`, injectable client, paginated `list`, `NoSuchKey`/404 →
      `FileNotFoundError`, ranged-GET `read_prefix_bytes`, declared `writable`.
-  4. `testing.py` — `DocumentStoreContract` in the `SandboxProviderContract` (`sandbox/testing.py:130`)
-     shape. The file imports `pytest`, so it is excluded from every lazy export map.
+  4. `knowledgebase/testing.py` — `DocumentStoreContract` in the `SandboxProviderContract`
+     (`sandbox/testing.py:130`) shape. The file imports `pytest`, so it is excluded from every lazy
+     export map, but it ships in the package so out-of-tree store authors can subclass it.
 - **Verify:** `uv run pytest tests/test_knowledgebase_stores.py` — the contract over a real `tmp_path`
   and a fake boto3 client, plus the containment matrix and the `a/z.md` vs `ab/b.md` ordering case.
 
@@ -156,13 +171,12 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
   (new), `examples/cli/knowledgebase/openai/okf/` (new).
 - **Steps:**
   1. `__init__.py` — the PEP 562 `_LAZY_EXPORTS` map of `deployment/aws/__init__.py:13-66`, with the
-     `TYPE_CHECKING` mirror block. The three SDK-backed managers and `testing.py` are deliberately not
-     exported (spec § `knowledgebase/__init__.py`; behavioural change 8).
+     `TYPE_CHECKING` mirror block. The three SDK-backed managers are deliberately not exported, and
+     neither is any contract suite (spec § `knowledgebase/__init__.py`; behavioural change 8).
   2. The example, in its siblings' shape (`build.sh`, `demo.py`, `demo_test.py`, `__init__.py`,
      `pyproject.toml`, `README.md`) plus the checked-in `bundle/` — root and `tables/` `index.md`, a
      `log.md`, three trust tiers, an unknown `type`, and one malformed file. `demo.py` calls no
-     `add_schema()` (that is what `derives_schema=True` buys) and registers a `semantic_map` for the
-     bundle root. `pyproject.toml` follows the sibling convention: runtime `agentkernel[cli,openai]`,
+     `add_schema()` (that is what `derives_schema=True` buys). `pyproject.toml` follows the sibling convention: runtime `agentkernel[cli,openai]`,
      dev group `agentkernel[test]`, and **no KB extra** — `pyyaml` is core.
   3. `README.md` walks `browse_kb` → `fetch_kb` → `search_kb` against real bundle paths.
 - **Verify:** `uv run pytest tests/test_knowledgebase_exports.py` (every `__all__` name resolves;
@@ -176,18 +190,123 @@ local `pytest` without CI credentials (`AGENTS.md:103-108`).
 - **Files:** `knowledgebase/testing.py` (extended), `ak-py/tests/test_knowledgebase_contract.py` (new),
   `ak-py/tests/test_knowledgebase_okf_envelope.py` (new).
 - **Steps:**
-  1. `testing.py` — `KnowledgeBaseContract` and `FakeKnowledgeBase` alongside the existing
-     `DocumentStoreContract`; neither contract class is named `Test*`.
+  1. `knowledgebase/testing.py` — `KnowledgeBaseContract` and `FakeKnowledgeBase` alongside the
+     existing `DocumentStoreContract`; neither contract class is named `Test*`, and the module lives
+     in the package rather than under `tests/`.
   2. `test_knowledgebase_contract.py` — the contract run against `FakeKnowledgeBase` in four capability
      shapes, `OKFManager` over a real local bundle, and the three existing backends with
      `chromadb.PersistentClient`, `neo4j.GraphDatabase.driver`, and `trino.dbapi.connect`
      monkeypatched. The `schema()`-is-callable assertion is the regression guard for the Starburst
      collision.
   3. `test_knowledgebase_okf_envelope.py` — a generated 10,000-concept bundle; all 10,000 kept, and
-     `tracemalloc` allocations attributable to `_walk()` under 50 MB (not RSS).
+     `tracemalloc` allocations attributable to `_walk()` under a 25 KB per-concept budget, measured
+     over a 2,000-concept slice and projected to 250 MB at 10,000 (allocations, not RSS).
 - **Verify:** `cd ak-py && uv run pytest -k knowledgebase` green, then `make lint-check-all`.
 
-## Iteration 9: Sync docs and skills
+## [A2] Iteration 9: Remove `read()`, relax the `search_kb` gate
+
+- **Goal:** the ABC carries only declared capabilities, and the routing rule lives in `read_kb`.
+  `search_kb` reaches every `search`-declaring backend. No agent-visible tool name or signature moves.
+- **Files:** `knowledgebase/base.py`, `knowledgebase/knowledgebuilder.py`,
+  `knowledgebase/testing.py`, `ak-py/tests/test_knowledgebase_base.py`,
+  `ak-py/tests/test_knowledgebase_builder.py`.
+- **Steps:**
+  1. Delete `KnowledgeBase.read` (spec § `knowledgebase/base.py`, the [A2] bullets). Nothing else in
+     `base.py` moves.
+  2. Inline the routing into `read_kb`, keeping the neither-`search`-nor-`query` guard and every
+     existing error string (spec § the agent surface, **[A2] `read_kb` owns the routing rule**).
+  3. Change `search_kb`'s gate to `self._backends_declaring("search")`, and rewrite both `read_kb`'s
+     and `search_kb`'s docstrings so the distinction they state is the one that exists
+     (`knowledgebuilder.py:278-279`).
+  4. Move the four routing assertions out of `test_knowledgebase_base.py` and restate them against
+     `read_kb`; replace `test_a_subclass_overriding_read_still_wins` with
+     `test_the_abc_exposes_no_read_method`; invert
+     `test_search_and_query_on_different_backends_does_not_emit_search_kb`; delete the contract's
+     `test_contract_read_routes_on_the_declaration` and rewrite the two contract tests that reach rows
+     through `read()` (spec § **Amended testing**, the move table).
+- **Verify:** `uv run pytest -k knowledgebase` — behavioural changes 18 and 19, and the guard that the
+  removal stays removed.
+
+## [A2] Iteration 10: `KnowledgeBuilder` extensions
+
+- **Goal:** the builder can emit a read-only tool set. Still no
+  role, agent, or OKF knowledge inside it.
+- **Files:** `knowledgebase/knowledgebuilder.py`, `ak-py/tests/test_knowledgebase_builder.py`.
+- **Steps:**
+  1. `build(writable: bool = True)`, inserting `write_kb` at index 2 when true so the historical order
+     survives (spec § **[A2] `build(writable: bool = True)`**).
+  2. ~~`__init__`'s third parameter `backend_semantic_maps`~~ — withdrawn 2026-09-24 with OKF's
+     `semantic_map` (spec § **[A2] Per-backend semantic maps — withdrawn**).
+- **Verify:** `uv run pytest tests/test_knowledgebase_builder.py` — behavioural change 20,
+  including that `build()` with no argument returns the same four callables in the same order.
+
+## [A2] Iteration 11: Config block, roles, and the capability manager
+
+- **Goal:** the `okf` block parses, validates, and resolves to constructed backends — with no agent
+  surface yet. Nothing in `core/` imports the KB tier at module scope.
+- **Files:** `core/config.py`, `knowledgebase/okf/roles.py` (new),
+  `knowledgebase/okf/capability.py` (new), `ak-py/tests/test_knowledgebase_okf_roles.py` (new),
+  `ak-py/tests/test_knowledgebase_okf_config.py` (new).
+- **Steps:**
+  1. `_OKFDatabaseConfig` / `_OKFConfig` and `AKConfig.okf: Optional[_OKFConfig] = None`, beside
+     `schedule` (spec § **[A2] `core/config.py` — the `okf` block**). Every field gets its
+     user-facing `description`.
+  2. `roles.py` — `OKFRole` (with `writable`), `OKFAssignment`, `OKFRoleRegistry.from_config` and its
+     two `AKConfigError`s.
+  3. `capability.py` — `OKFCapabilityManager` singleton with `get()`/`reset()`, lazy per-database
+     `backend()`, per-agent `builder_for()`, `_resolve_store`'s three branches plus the agreement
+     check, and `validate_configuration()` including the read-only-store warning.
+- **Verify:** `uv run pytest tests/test_knowledgebase_okf_roles.py
+  tests/test_knowledgebase_okf_config.py` — plus a pre-change `config.yaml` parsing to `okf is None`,
+  which is the compatibility assertion behavioural change 23 rests on.
+
+## [A2] Iteration 12: The agent surface
+
+- **Goal:** a configured agent receives its tools and its instructions automatically, and write
+  permission is enforced per `(agent, database)`.
+- **Files:** `knowledgebase/okf/prompts.py` (new), `knowledgebase/okf/tools.py` (new),
+  `knowledgebase/okf/manager.py`, `core/tool.py`,
+  `ak-py/tests/test_knowledgebase_okf_prompts.py` (new),
+  `ak-py/tests/test_knowledgebase_okf_tools.py` (new),
+  `ak-py/tests/test_knowledgebase_okf_manager.py`.
+- **Steps:**
+  1. Rename `OKFManager.__init__`'s `producer` to `write_actor` (`manager.py:106,118,142`;
+     `_default_producer` at `:835` follows) and update the four test call sites at
+     `test_knowledgebase_okf_manager.py:431,454,471,529`. Do this **first** in the iteration: it is the
+     name collision that makes the rest readable.
+  2. `prompts.py` — `OKFPromptComposer` with the per-role `MANDATES` and the navigation protocol
+     lifted from `examples/.../okf/demo.py:45-72`.
+  3. `tools.py` — `OKFToolFactory.get_tools`, the seven closures over the agent name, the write
+     wrapper keyed to the closure's agent name, and the `func.__name__` discipline.
+  4. The **double-binding warning** (design decision 18): compare the names about to be attached
+     against those already on the native agent, log one WARNING on overlap, attach anyway. Reading the
+     existing names is defensive — an adapter exposing no list-shaped `tools` yields no warning, never
+     a raise (spec § **[A2] Double-binding warning**).
+  5. `core/tool.py` — the `okf` branch in `get_all`, after the `schedule` branch, with the lazy import
+     and **without** `_agent_allowed` (spec § **[A2] `core/tool.py` — one `SystemToolFactory`
+     branch**).
+- **Verify:** `uv run pytest tests/test_knowledgebase_okf_tools.py
+  tests/test_knowledgebase_okf_prompts.py tests/test_knowledgebase_okf_manager.py` — behavioural
+  changes 22, 23, 24 and 25, plus the laziness guarantee (no store walk during `get_tools`) and the
+  shared-manager walk counter.
+
+## [A2] Iteration 13: The three-agent example
+
+- **Goal:** the example demonstrates the capability rather than teaching OKF. No import from
+  `agentkernel.knowledgebase` remains in `demo.py`.
+- **Files:** `examples/cli/knowledgebase/openai/okf/demo.py`, `.../config.yaml` (new),
+  `.../demo_test.py`, `.../README.md`.
+- **Steps:**
+  1. `config.yaml` with the single `warehouse` database naming the three agents.
+  2. Rewrite `demo.py` to three `Agent(...)` constructions plus `OpenAIModule([...])`, deleting the
+     store/manager/builder wiring and the `EXECUTION PROTOCOL` string.
+  3. `demo_test.py` — one ordered case per role, a fourth pinning the consumer's write refusal, and the
+     assertion that `demo.py` imports nothing from `agentkernel.knowledgebase`.
+  4. `README.md` — the config path first, the programmatic path second, the agent-name-must-match
+     warning, and the note that generated concepts land in `bundle/generated/`.
+- **Verify:** `cd examples/cli/knowledgebase/openai/okf && ./build.sh && uv run pytest -s`.
+
+## Iteration 14: Sync docs and skills
 
 Each surface below was checked against the branch; line numbers are where the stale text is today.
 
@@ -214,14 +333,59 @@ Each surface below was checked against the branch; line numbers are where the st
     `KnowledgeBaseContract` requirement to step 9 (`:149`) and the checklist (`:174`).
   - `.agents/skills/ak-dev-architecture/SKILL.md:520-521` — the `KnowledgeBase` member list and the
     four-tool `KnowledgeBuilder` line; `:714-716` — the directory tree gains `model.py`, `errors.py`,
-    `document.py`, `store/`, `okf/`, `testing.py`.
+    `document.py`, `store/`, `okf/` and `testing.py` (the contract suites, next to the ABC).
   - `ak-py/src/agentkernel/skills/ak-add-capabilities/SKILL.md:353-419` — the knowledge-base capability
     section: the new tools, and OKF as a backend option. Its custom-backend pointer at `:418-419` stays
     valid.
 - **Verified as needing no update:** no `AKConfig` section, so nothing under `ak-deployment/` or the
   Helm chart changes; no framework adapter, `Runtime`, or `Session` surface moves; no existing test
   file references the knowledge-base tier (grep over `ak-py/tests/` and `e2e/`), so **no patch target
-  moves anywhere in the suite**; `.agents/skills/ak-dev-testing-conventions` needs no change — the two
-  new contract suites follow the pattern it already documents.
+  moves anywhere in the suite**. `.agents/skills/ak-dev-testing-conventions` **does** need a change,
+  contrary to this plan's original claim: its `## Test File Organization` table inventories individual
+  test modules and already names the other two reusable contracts, so the ten new
+  `test_knowledgebase*` modules and `knowledgebase/testing.py` belong in it.
+
+**[A2] Surfaces the amendment adds.** The list above stands; these are additional.
+
+- **Docs:**
+  - `docs/docs/advanced/knowledge-bases.md:47,484` — both places that explain "one `read_kb` tool
+    serves every backend **because `read()` routes**"; the routing is the tool's now.
+  - same file `:252` — `read_kb` described as "routed through `read()`".
+  - same file `:267` — the `search_kb` narrow-gate paragraph.
+  - same file `:287` — semantic-map resolution gains the per-backend form.
+  - same file `:490` — the capability/tool table's `search` row drops "and `search_kb` when `query` is
+    declared too".
+  - same file, **new section** — the `okf` config block, the three roles, what each grants, the
+    per-`(agent, database)` write rule, and choosing config vs programmatic wiring.
+  - `docs/docs/core-concepts/overview.md:353` — the operation list drops `read`.
+- **Skills:**
+  - `.agents/skills/ak-dev-new-knowledgebase-integration/SKILL.md:112-113` — the capability/tool matrix
+    rows for `search` and `query`; `:133` and `:353` — both describe `read()`'s routing as a
+    `KnowledgeBase` behavior; `:136` — the `search_kb` gate.
+  - `.agents/skills/ak-dev-architecture/SKILL.md` — its Knowledge Bases section states `read()` is
+    concrete and routes, and states `search_kb`'s gate as "**both** `search` and `query` — a
+    per-backend check no built-in satisfies". Both sentences are invalidated. The section also gains
+    the `okf` block and the role layer, and the directory tree gains `okf/roles.py`,
+    `okf/capability.py`, `okf/prompts.py`, `okf/tools.py`.
+  - `.agents/skills/ak-dev-architecture/SKILL.md`, **AKConfig section** — `okf` joins the "Optional
+    (capability-gating) sections" list beside `thread` and `schedule`.
+  - `ak-py/src/agentkernel/skills/ak-add-capabilities/SKILL.md:376,414` — `build()` now returns three
+    to seven callables, not four to seven; `:408` — the read-only guidance predates role scoping.
+  - `.agents/skills/ak-dev-testing-conventions/SKILL.md` — its test-module table gains
+    `test_knowledgebase_okf_roles`, `test_knowledgebase_okf_config`, `test_knowledgebase_okf_tools`,
+    `test_knowledgebase_okf_prompts`, and the `test_knowledgebase_base`/`_builder` rows are amended
+    where the moved assertions are described.
+- **[A2] Corrections to this iteration's "needs no update" claims**, both of which the amendment
+  falsifies:
+  - *"no `AKConfig` section, so nothing under `ak-deployment/` or the Helm chart changes"* — there **is**
+    an `AKConfig` section now. The conclusion still holds but for a different reason: the `okf` block
+    names a bundle location the application already owns (a path in its image, or an S3 prefix), and
+    provisions no cloud resource, so no Terraform module and no chart template gains a variable.
+    Verify by grepping `ak-deployment/` for `AK_THREAD__`/`AK_SCHEDULE__` and confirming no `AK_OKF__`
+    analogue is needed.
+  - *"no existing test file references the knowledge-base tier, so no patch target moves"* — iteration 9
+    moves assertions in `knowledgebase/testing.py` and two test modules, and iteration 12 renames four
+    `OKFManager(producer=...)` call sites. The moves are enumerated in spec § **Amended testing**.
+
 - **Verify:** run the `ak-dev-sync-docs-from-branch` and `ak-dev-sync-skills-from-branch` flows before
   merge to catch any surface this list missed, then `make lint-check-all`.

@@ -1,19 +1,21 @@
-"""Reusable contract suites for knowledge-base backends and document stores.
+"""Public testing helpers for knowledge-base backends and document stores.
 
-``DocumentStoreContract`` asserts the semantics every
-:class:`agentkernel.knowledgebase.store.base.DocumentStore` must honor, and
-``KnowledgeBaseContract`` does the same for every
-:class:`agentkernel.knowledgebase.base.KnowledgeBase`. Subclass one in a test module and
-override its fixture; both are deliberately NOT named ``Test*`` so pytest does not collect
-them on their own, and this module is not named ``test_*`` so pytest does not collect the
-module either.
+Three things live here, all importable by bring-your-own-backend authors:
 
-``FakeKnowledgeBase`` is the dependency-free reference backend the knowledge-base contract is
-proven against before it is pointed at anything real: when it passes for the fake and fails
-for a backend, the backend is what is wrong.
+* ``KnowledgeBaseContract`` — a reusable pytest suite asserting the ABC semantics every
+  :class:`agentkernel.knowledgebase.base.KnowledgeBase` must honor.
+* ``DocumentStoreContract`` — the same for every
+  :class:`agentkernel.knowledgebase.store.base.DocumentStore`.
+* ``FakeKnowledgeBase`` — a dependency-free, in-memory ``KnowledgeBase`` used as the reference
+  backend the contract is proven against before it is pointed at anything real: when it passes
+  for the fake and fails for a backend, the backend is what is wrong.
 
-It all lives under ``tests/`` rather than in the package, so it is a suite this repo holds its
-own backends to — not a published helper for out-of-tree backend authors.
+Subclass a contract in a test module and override its fixture; both are deliberately NOT named
+``Test*`` so pytest does not collect them on their own.
+
+This module imports ``pytest`` and is therefore only meant to be imported from test code — it
+is intentionally left out of ``agentkernel.knowledgebase``'s lazy exports so ``import
+agentkernel.knowledgebase`` stays free of a pytest dependency.
 """
 
 import re
@@ -22,10 +24,10 @@ from typing import Any, Iterable, List, Mapping, Optional
 
 import pytest
 
-from agentkernel.knowledgebase.base import KnowledgeBase, Record
-from agentkernel.knowledgebase.errors import KnowledgeCapabilityError, KnowledgePathError
-from agentkernel.knowledgebase.model import KnowledgeCapabilities
-from agentkernel.knowledgebase.store.base import DocumentStore
+from .base import KnowledgeBase, Record
+from .errors import KnowledgeCapabilityError, KnowledgePathError
+from .model import KnowledgeCapabilities
+from .store.base import DocumentStore
 
 # Paths every store must refuse: parent traversal in both separator styles, an absolute
 # path, and a normalising escape that only shows itself after the path is reduced.
@@ -646,6 +648,20 @@ class KnowledgeBaseContract:
 
         assert knowledge_base.schema()["capabilities"] == knowledge_base.capabilities.model_dump()
 
+    def _read(self, knowledge_base: KnowledgeBase) -> list:
+        """
+        Call whichever read-shaped operation the backend declares.
+
+        The ABC no longer routes between the two, so the contract picks the operation the
+        declaration names rather than going through a shared entrypoint.
+
+        :param knowledge_base: Backend under test.
+        :return: Records the declared operation returned.
+        """
+        if knowledge_base.capabilities.query:
+            return knowledge_base.query(self.query_statement())
+        return knowledge_base.search(self.search_query())
+
     def test_contract_deriving_a_schema_means_deriving_something(self, knowledge_base: KnowledgeBase):
         if not knowledge_base.capabilities.derives_schema:
             pytest.skip(f"{knowledge_base.backend_name} does not derive a schema")
@@ -656,31 +672,8 @@ class KnowledgeBaseContract:
         # And the payoff: schema() answers with no add_schema() call at all.
         assert isinstance(knowledge_base.schema(), Mapping)
 
-    def test_contract_read_routes_on_the_declaration(self, knowledge_base: KnowledgeBase, monkeypatch):
-        # Spied rather than compared by result: a backend whose two operations happened to
-        # return the same rows would otherwise pass with a broken router.
-        routed = []
-        target = "query" if knowledge_base.capabilities.query else "search"
-        other = "search" if knowledge_base.capabilities.query else "query"
-
-        def record_call(text, limit=3, **kwargs):
-            routed.append((target, text, limit, kwargs))
-            return []
-
-        def refuse(text, limit=3, **kwargs):
-            pytest.fail(f"read() routed to {other} on a backend declaring query={knowledge_base.capabilities.query}")
-
-        monkeypatch.setattr(knowledge_base, target, record_call)
-        monkeypatch.setattr(knowledge_base, other, refuse)
-
-        knowledge_base.read("probe", limit=7, extra="forwarded")
-
-        assert routed == [(target, "probe", 7, {"extra": "forwarded"})]
-
-    def test_contract_read_returns_records_through_the_real_operation(self, knowledge_base: KnowledgeBase):
-        text = self.query_statement() if knowledge_base.capabilities.query else self.search_query()
-
-        self._assert_records(knowledge_base, knowledge_base.read(text))
+    def test_contract_the_declared_read_operation_returns_records(self, knowledge_base: KnowledgeBase):
+        self._assert_records(knowledge_base, self._read(knowledge_base))
 
     def test_contract_get_description_names_the_backend(self, knowledge_base: KnowledgeBase):
         description = knowledge_base.get_description()
@@ -695,8 +688,7 @@ class KnowledgeBaseContract:
 
     def test_contract_format_results_renders_the_rows_the_backend_produced(self, knowledge_base: KnowledgeBase):
         # Catches an override that raises on a record shape its own operation emits.
-        text = self.query_statement() if knowledge_base.capabilities.query else self.search_query()
-        rendered = knowledge_base.format_results(knowledge_base.read(text))
+        rendered = knowledge_base.format_results(self._read(knowledge_base))
 
         assert isinstance(rendered, str) and rendered
 

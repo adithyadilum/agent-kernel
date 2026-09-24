@@ -52,8 +52,12 @@ _FIELD_WEIGHTS = {"title": 4, "tags": 3, "type": 2, "description": 2, "body": 1}
 # byte-identical documents. Caller extras follow, in the order the caller supplied them.
 _WRITE_KEY_ORDER = ("type", "title", "description", "resource", "tags", "status", "stale_after", "generated", "sources")
 
-# `generated` and `verified` are reserved provenance metadata; allowing callers to supply them would let writers forge the producer or trust tier.
+# `generated` and `verified` are reserved provenance metadata; allowing callers to supply them would let writers forge the write actor or trust tier.
 # `source`, `kind`, `trust`, `stale` and `links` are derived on read, so writing a fetched record back would persist a derived signal as frontmatter.
+# `query` and `params` are how KnowledgeBuilder.write_kb carries the backend-specific write
+# statement a query-language backend executes. An OKF bundle has no query language and ignores
+# both, so they are the tool's transport rather than the concept's content: left unreserved they
+# were written into the document as frontmatter, contradicting the tool's own docstring.
 # Other unknown metadata is preserved as `extra` rather than dropped.
 _WRITE_RESERVED_METADATA = frozenset(
     {
@@ -73,6 +77,8 @@ _WRITE_RESERVED_METADATA = frozenset(
         "trust",
         "stale",
         "links",
+        "query",
+        "params",
     }
 )
 
@@ -84,6 +90,10 @@ _STRUCTURAL_RECORD_KINDS = frozenset({"directory", "index"})
 _SLUG_SEPARATOR = re.compile(r"[^a-z0-9]+")
 _FALLBACK_SLUG = "concept"
 _SLUG_MAX_LENGTH = 48
+
+# How much of its own text a concept the backend authors takes as a title. Long enough to carry
+# a whole fact, short enough to stay a label in a browse listing.
+_TITLE_MAX_LENGTH = 72
 
 
 class OKFManager(DocumentKnowledgeBase):
@@ -103,7 +113,7 @@ class OKFManager(DocumentKnowledgeBase):
         description: Optional[str] = None,
         refresh_seconds: Optional[float] = 300.0,
         max_concepts: int = 10_000,
-        producer: Optional[str] = None,
+        write_actor: Optional[str] = None,
         write_prefix: str = "generated",
     ) -> None:
         """
@@ -115,8 +125,9 @@ class OKFManager(DocumentKnowledgeBase):
         :param refresh_seconds: How stale the manifest may get before the next operation
             re-walks; ``None`` disables automatic refresh entirely.
         :param max_concepts: Ceiling on retained concepts; the walk truncates beyond it.
-        :param producer: Actor stamped into ``generated.by`` on write; defaults to
-            ``"agentkernel/<version>"``.
+        :param write_actor: Actor stamped into ``generated.by`` on write; defaults to
+            ``"agentkernel/<version>"``. Named for what it records rather than for the OKF
+            ``producer`` role, which is a different concept declared in configuration.
         :param write_prefix: Directory synthesised write paths are placed under.
         :return: None.
         :raises ValueError: If the resulting capability declaration is incoherent.
@@ -139,7 +150,7 @@ class OKFManager(DocumentKnowledgeBase):
         self._refresh_seconds = refresh_seconds
         self._max_concepts = max_concepts
         self._write_prefix = write_prefix
-        self._producer = producer.strip() if producer and producer.strip() else self._default_producer()
+        self._write_actor = write_actor.strip() if write_actor and write_actor.strip() else self._default_write_actor()
 
         self._manifest: Optional[OKFBundle] = None
         self._loaded_at = 0.0
@@ -290,7 +301,10 @@ class OKFManager(DocumentKnowledgeBase):
         prepared: List[tuple[str, str, dict]] = []
         for record in records or []:
             metadata = dict(record.get("metadata", {}) or {})
-            prepared.append((self._write_path(metadata), record.get("text", "") or "", metadata))
+            text = record.get("text", "") or ""
+            if not self._supplied_id(metadata):
+                self._title_new_concept(text, metadata)
+            prepared.append((self._write_path(metadata), text, metadata))
 
         self._ensure_manifest()
         written: dict[str, OKFConcept] = {}
@@ -537,6 +551,8 @@ class OKFManager(DocumentKnowledgeBase):
             bundle.diagnostics.append(OKFDiagnostic(path=path, code=DiagnosticCode.UNREADABLE.value, message=f"document disappeared: {error}"))
         except KnowledgePathError as error:
             bundle.diagnostics.append(OKFDiagnostic(path=path, code=DiagnosticCode.PATH_ESCAPE.value, message=str(error)))
+        except Exception as error:
+            bundle.diagnostics.append(OKFDiagnostic(path=path, code=DiagnosticCode.UNREADABLE.value, message=f"document is not readable: {error}"))
         return None
 
     @staticmethod
@@ -640,22 +656,67 @@ class OKFManager(DocumentKnowledgeBase):
         Subdirectories come from :meth:`_child_directories`, the same derivation ``schema``
         reports, so the two views of the bundle an agent is given cannot disagree.
 
+        Subdirectories are listed before concepts, so a flat truncation at ``limit`` hid every
+        concept in a directory holding more subdirectories than the budget — the agent was told
+        the namespace contained nothing it could read. Both kinds are apportioned a share
+        instead, so neither is squeezed out entirely by the other.
+
         :param manifest: The loaded manifest.
         :param directory: Normalised bundle-relative directory.
         :param limit: Maximum number of entries.
-        :return: Child records in lexicographic order.
+        :return: Child records in lexicographic order, directories first.
         """
         prefix = f"{directory}/" if directory else ""
-        subdirectories = self._child_directories(manifest, prefix)
-        concepts = [concept for path, concept in manifest.concepts.items() if path.startswith(prefix) and "/" not in path[len(prefix) :]]
+        subdirectories = sorted(self._child_directories(manifest, prefix))
+        concepts = sorted(
+            (concept for path, concept in manifest.concepts.items() if path.startswith(prefix) and "/" not in path[len(prefix) :]),
+            key=lambda item: item.path,
+        )
 
         if not concepts and not subdirectories and directory:
             log.warning("[%s.browse] no such directory in the bundle: %r", self.backend_name, directory)
             return []
+        if limit <= 0:
+            return []
 
-        entries: List[Record] = [self._directory_record(prefix, name) for name in sorted(subdirectories)]
-        entries.extend(self._concept_record(concept) for concept in sorted(concepts, key=lambda item: item.path))
-        return entries[:limit] if limit > 0 else []
+        directory_count, concept_count = self._apportion(len(subdirectories), len(concepts), limit)
+        # Debug, not warning: an over-limit listing is routine (a 60-concept directory under the
+        # default limit=50 hits it on every call), not a fault anyone needs to act on.
+        if directory_count < len(subdirectories) or concept_count < len(concepts):
+            log.debug(
+                "[%s.browse] %r holds %d subdirector(ies) and %d concept(s); listing %d and %d at limit=%d",
+                self.backend_name,
+                directory or "<root>",
+                len(subdirectories),
+                len(concepts),
+                directory_count,
+                concept_count,
+                limit,
+            )
+
+        entries: List[Record] = [self._directory_record(prefix, name) for name in subdirectories[:directory_count]]
+        entries.extend(self._concept_record(concept) for concept in concepts[:concept_count])
+        return entries
+
+    @staticmethod
+    def _apportion(directories: int, concepts: int, limit: int) -> tuple[int, int]:
+        """
+        Divide a listing budget between subdirectories and concepts.
+
+        Whichever kind fits entirely gets all of it and the other takes the rest; when neither
+        does, each is guaranteed half. That guarantee is the point: a directory is a namespace
+        the agent can browse further and a concept is something it can read, so a listing
+        showing only one of them misrepresents what is there.
+
+        :param directories: How many subdirectories the namespace holds.
+        :param concepts: How many concepts it holds.
+        :param limit: Maximum number of entries to return.
+        :return: How many of each to list.
+        """
+        if directories + concepts <= limit:
+            return directories, concepts
+        directory_count = min(directories, max(limit // 2, limit - concepts))
+        return directory_count, limit - directory_count
 
     @staticmethod
     def _directory_record(prefix: str, name: str) -> Record:
@@ -752,8 +813,8 @@ class OKFManager(DocumentKnowledgeBase):
         :raises KnowledgePathError: If a supplied id escapes the bundle, contains a ``,``,
             resolves to the bundle root, or names a reserved OKF file.
         """
-        supplied = metadata.get("id")
-        if isinstance(supplied, str) and supplied.strip():
+        supplied = self._supplied_id(metadata)
+        if supplied:
             path = DocumentStore.normalise_relative(supplied)
             if not path:
                 raise KnowledgePathError(f"concept path may not be the bundle root: {supplied!r}")
@@ -770,6 +831,69 @@ class OKFManager(DocumentKnowledgeBase):
 
         slug = self._slug(metadata.get("title") or metadata.get("type") or _FALLBACK_SLUG)
         return f"{self._write_prefix}/{slug}-{uuid4().hex[:8]}{_MARKDOWN_SUFFIX}"
+
+    @staticmethod
+    def _supplied_id(metadata: Mapping[str, Any]) -> str:
+        """
+        Return the bundle path the caller named, or ``""`` when the record names none.
+
+        The one place "did the caller choose where this goes" is decided, because two things
+        hang off the answer: which branch :meth:`_write_path` takes, and whether the concept is
+        the caller's existing document or one the backend is authoring on its behalf.
+
+        :param metadata: The record's metadata.
+        :return: The supplied id, stripped, or ``""``.
+        """
+        supplied = metadata.get("id")
+        return supplied.strip() if isinstance(supplied, str) and supplied.strip() else ""
+
+    @classmethod
+    def _title_new_concept(cls, text: str, metadata: dict) -> None:
+        """
+        Title a concept the caller is authoring, from the concept's own text.
+
+        Only reached for a record naming no id, which is every write the ``write_kb`` tool
+        makes: its signature carries no title, so without this each produced concept is an
+        untitled ``Note`` at ``generated/concept-<hex>.md``. ``search_kb`` and ``browse_kb``
+        return summaries rather than bodies, so such a concept rendered as its own path twice
+        and none of the knowledge, leaving later readers to fetch every generated file to find
+        out what any of them says. The title also gives the synthesised path a slug that means
+        something.
+
+        A record carrying an id is left alone, and a caller supplying its own title keeps it: a
+        fetched concept written back must gain no frontmatter its curator did not write.
+
+        :param text: The body the concept is being written with.
+        :param metadata: The record's metadata, titled in place when it carries none.
+        :return: None.
+        """
+        if metadata.get("title"):
+            return
+        title = cls._summarise(text)
+        if title:
+            metadata["title"] = title
+
+    @staticmethod
+    def _summarise(text: str) -> str:
+        """
+        Reduce a body to one line that can stand as a title.
+
+        The first line carrying words, with markdown heading and list markers taken off, clipped
+        at a word boundary. Deliberately not a sentence splitter: an abbreviation would cut the
+        title short, and a label that is a little long costs less than one that stops mid-fact.
+
+        :param text: The body text.
+        :return: The title, or ``""`` when the body carries no words.
+        """
+        for line in (text or "").splitlines():
+            candidate = line.strip().lstrip("#>-*+ \t").strip()
+            if not candidate:
+                continue
+            if len(candidate) <= _TITLE_MAX_LENGTH:
+                return candidate
+            clipped = candidate[:_TITLE_MAX_LENGTH].rsplit(" ", 1)[0].rstrip(" ,;:.")
+            return f"{clipped or candidate[:_TITLE_MAX_LENGTH]}…"
+        return ""
 
     def _render_document(self, text: str, metadata: dict) -> str:
         """
@@ -790,7 +914,7 @@ class OKFManager(DocumentKnowledgeBase):
             "tags": metadata.get("tags"),
             "status": metadata.get("status"),
             "stale_after": metadata.get("stale_after"),
-            "generated": {"by": self._producer, "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat()},
+            "generated": {"by": self._write_actor, "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat()},
             "sources": metadata.get("sources"),
         }
         ordered = {key: frontmatter[key] for key in _WRITE_KEY_ORDER if frontmatter[key] is not None}
@@ -832,7 +956,7 @@ class OKFManager(DocumentKnowledgeBase):
         return slug[:_SLUG_MAX_LENGTH] or _FALLBACK_SLUG
 
     @staticmethod
-    def _default_producer() -> str:
+    def _default_write_actor() -> str:
         """
         Resolve the actor string stamped into ``generated.by``.
 
