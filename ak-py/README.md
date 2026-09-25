@@ -10,7 +10,7 @@ Agent Kernel is a lightweight **AI agent runtime** and adapter layer for buildin
 - **Unified API**: Common abstractions (Agent, Runner, Session, Module, Runtime) across frameworks
 - **Multi-Framework Support**: OpenAI Agents SDK, CrewAI, LangGraph, Google ADK, Smolagents, and Pydantic AI
 - **Session Management**: Built-in session abstraction with pluggable storage backends
-- **Knowledge Bases**: Unified `KnowledgeBase` interface with ChromaDB, Neo4j, and Starburst/Trino backends via `KnowledgeBuilder`
+- **Knowledge Bases**: Unified, capability-declaring `KnowledgeBase` interface with ChromaDB, Neo4j, Starburst/Trino and Open Knowledge Format bundle (local directory or S3) backends via `KnowledgeBuilder`
 - **Sandbox**: Execute agent-generated code and shell commands in an isolated, permission-bounded environment with pluggable providers (`local_subprocess`, `docker`, `kubernetes`, `e2b`, `daytona`, `ec2_ssm`), workload profiles, policy enforcement, per-user identity, and a queue-decoupled broker for long-running executions
 - **Scheduled Tasks**: Deferred and recurring chat execution (`schedule.at`/`schedule.cron`) with a management REST API, five agent-facing tools, and pluggable provider (`local`, `eventbridge`) and store (`in_memory`, `redis`, `valkey`, `dynamodb`) backends
 - **Flexible Deployment**: Interactive CLI, REST API, serverless, or containerized deployment — see the "Multi-Cloud Deployment" section below
@@ -34,6 +34,9 @@ pip install "agentkernel[chromadb]"
 pip install "agentkernel[neo4j]"
 pip install "agentkernel[trino]"
 ```
+
+Open Knowledge Format bundles need no extra - `pyyaml` is a core dependency. Serving a bundle from S3
+uses the `aws` extra: `pip install "agentkernel[aws]"`.
 
 For LLM-based thread naming with Conversation Thread Support:
 
@@ -1133,7 +1136,7 @@ Configure test comparison modes for automated testing. Test configuration is sep
 - **Evaluator**
   - **Field**: `evaluator`
   - **Default**: `deepeval`
-  - **Description**: Built-in evaluator short name, or a dotted path to your own `AKEvaluator` subclass
+  - **Description**: Built-in evaluator short name (`deepeval` or `opik`), or a dotted path to your own `AKEvaluator` subclass
   - **Environment Variable**: `AK_TEST__EVALUATOR`
 
 - **Llm Model**
@@ -1155,8 +1158,8 @@ Configure test comparison modes for automated testing. Test configuration is sep
   - **Environment Variable**: `AK_TEST__LLM__EMBEDDING_MODEL`
 
 **Test Modes:**
-- `score`: Deterministic, offline string-match scoring via the configured evaluator (built-in DeepEval evaluator: `Scorer.quasi_exact_match_score`)
-- `llm`: LLM-as-judge evaluation via the configured evaluator (built-in DeepEval evaluator: `GEval`) for semantic similarity
+- `score`: Deterministic, offline string-match scoring via the configured evaluator (built-in `deepeval`: `Scorer.quasi_exact_match_score`; built-in `opik`: `LevenshteinRatio`, requires `pip install "agentkernel[opik]"`)
+- `llm`: LLM-as-judge evaluation via the configured evaluator (built-in `deepeval` or `opik`: `GEval`) for semantic similarity
 - `fallback`: Tries score first, falls back to llm if score fails
 
 ```yaml
@@ -1518,7 +1521,7 @@ export AK_TRACE__TYPE=langfuse  # or openllmetry, logfire
 # export LOGFIRE_TOKEN=your-write-token
 # Test harness (loaded from the separate test-config.yaml — see Test Configuration)
 export AK_TEST__MODE=fallback  # Options: score, llm, fallback
-export AK_TEST__EVALUATOR=deepeval  # Built-in short name, or a dotted path to your own AKEvaluator subclass
+export AK_TEST__EVALUATOR=deepeval  # Built-in short name (deepeval or opik), or a dotted path to your own AKEvaluator subclass
 export AK_TEST__LLM__MODEL=gpt-4o-mini
 export AK_TEST__LLM__PROVIDER=openai
 export AK_TEST__LLM__EMBEDDING_MODEL=text-embedding-3-small
@@ -1787,6 +1790,8 @@ gmail:
 ### Test Configuration (test-config.yaml)
 
 Test harness configuration (comparison mode, evaluator backend, llm models) is separate from the application configuration. It is not part of `config.yaml` — it lives in its own `test-config.yaml` file, resolved from the current working directory, and is only loaded when the testing utilities (`agentkernel.test`) are used. A legacy `test:` section in `config.yaml` is ignored. See [Test Configuration](#test-configuration) under Configuration Options for the full list of fields and defaults.
+
+The `evaluator` field accepts two built-in short names — `deepeval` (default, `pip install "agentkernel[test]"`) or `opik` (`pip install "agentkernel[opik]"`, [Opik](https://www.comet.com/docs/opik/) by Comet, runs entirely locally with `OPIK_TRACK_DISABLE` set so no Opik Cloud account or API key is needed) — or a dotted path to your own `AKEvaluator` subclass.
 
 **test-config.yaml:**
 

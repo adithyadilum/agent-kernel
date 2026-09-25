@@ -13,7 +13,7 @@ create_deployment_packages() {
     if [[ ${1-} != "local" ]]; then
         uv pip install -r requirements.txt --target=dist-rest-service/data
     else
-        uv pip install -r requirements.txt --target=dist-rest-service/data --find-links ../../../ak-py/dist --upgrade-package agentkernel
+        uv pip install -r requirements.txt --target=dist-rest-service/data --find-links ../../../ak-py/dist --upgrade-package agentkernel --reinstall-package agentkernel
     fi
 	cp config.yaml app_rest_service.py dist-rest-service/data/
 
@@ -23,7 +23,7 @@ create_deployment_packages() {
     if [[ ${1-} != "local" ]]; then
         uv pip install -r requirements.txt --target=dist-agent-runner/data
     else
-        uv pip install -r requirements.txt --target=dist-agent-runner/data --find-links ../../../ak-py/dist --upgrade-package agentkernel
+        uv pip install -r requirements.txt --target=dist-agent-runner/data --find-links ../../../ak-py/dist --upgrade-package agentkernel --reinstall-package agentkernel
     fi
     cp config.yaml app_agent_runner.py dist-agent-runner/data/
 
@@ -39,12 +39,10 @@ function read_tfvar() {
 }
 
 function wait_for_ecs_stable() {
-	local region product_alias env_alias module_name cluster services
+	local region prefix cluster services
 	region=$(read_tfvar region)
-	product_alias=$(read_tfvar product_alias)
-	env_alias=$(read_tfvar env_alias)
-	module_name=$(read_tfvar module_name)
-	cluster="${product_alias}-${env_alias}-${module_name}"
+	prefix=$(read_tfvar prefix)
+	cluster="${prefix}"
 
 	echo "Resolving ECS services in cluster '${cluster}' (region ${region})..."
 	services=$(aws ecs list-services --cluster "$cluster" --region "$region" \

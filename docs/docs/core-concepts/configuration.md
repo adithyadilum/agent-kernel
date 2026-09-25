@@ -166,6 +166,20 @@ schedule:
       ttl: 0
   agents: []  # Agents the schedule tools attach to; omit for all agents
 
+# Open Knowledge Format knowledge bases (optional - the capability is enabled by the presence
+# of this block. Each database must name at least one agent, and each named agent is given the
+# matching tools and instructions automatically. See /docs/advanced/knowledge-bases)
+okf:
+  databases:
+    warehouse:  # the key is what agents pass as the `backend` argument to the KB tools
+      type: local  # local | s3, or a dotted path to a DocumentStore subclass
+      uri: ./bundle  # a filesystem path, an s3://bucket/prefix, or your store's own location
+      description: "Analytics warehouse concepts, one per table."  # surfaced to the agent
+      refresh_seconds: 300  # how stale the manifest may get before a re-walk; null disables it
+      consumer: [Support_Agent]  # read access
+      producer: [Ingest_Agent]   # read and write; instructed to add new knowledge
+      curator: [Steward_Agent]   # read and write; instructed to maintain existing knowledge
+
 # Messaging platform integrations
 slack:
   agent: ""  # Default agent for Slack
@@ -690,11 +704,11 @@ Note that the file is un-nested: since it contains only test configuration, ther
 If `test-config.yaml` is missing, defaults apply silently (no warning is printed). Score and fallback tests need no configuration file at all.
 
 **Test Modes:**
-- `score` - Deterministic, offline string-match scoring via the configured evaluator (the built-in DeepEval evaluator uses `Scorer.quasi_exact_match_score`)
-- `llm` - LLM-as-judge evaluation via the configured evaluator (the built-in DeepEval evaluator uses `GEval`) for semantic similarity
+- `score` - Deterministic, offline string-match scoring via the configured evaluator (DeepEval uses `Scorer.quasi_exact_match_score`; Opik uses `LevenshteinRatio`)
+- `llm` - LLM-as-judge evaluation via the configured evaluator (DeepEval and Opik both use a `GEval` metric) for semantic similarity
 - `fallback` - Tries score first, falls back to llm if score fails
 
-**Evaluator backend:** `evaluator` selects the pluggable scoring backend used by both `score` and `llm` modes. `deepeval` (the default) is the only built-in; any other value is treated as a dotted path to your own `AKEvaluator` subclass (`agentkernel.test.core.akevaluators.AKEvaluator`) — see [Bring your own evaluator](../testing/cli-testing.md#bring-your-own-evaluator).
+**Evaluator backend:** `evaluator` selects the pluggable scoring backend used by both `score` and `llm` modes. Built-in values are `deepeval` (the default, requires the `test` extra) and `opik` (requires the `opik` extra); any other value is treated as a dotted path to your own `AKEvaluator` subclass (`agentkernel.test.core.evaluator.AKEvaluator`) — see [Bring your own evaluator](../testing/cli-testing.md#bring-your-own-evaluator). Opik's `GEval` judge runs entirely locally against the LLM configured under `llm:` below — it does not require an Opik Cloud account, API key, or self-hosted server (AK disables its trace logging by default).
 
 ### Custom Test Configuration File Path
 
