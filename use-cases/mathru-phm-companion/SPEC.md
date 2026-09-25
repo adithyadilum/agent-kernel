@@ -1,11 +1,17 @@
 # Mathru - Maternal Health Companion Specification
 
+This is the maintained specification for the implemented competition prototype. The
+original build brief is preserved in Git history. Deferred phase 4 work is listed
+separately and is not part of the current deliverable. All clinical datasets still ship
+as `placeholder`: schedules return no usable dates and nonempty symptom reports resolve
+to red, with PHM delivery attempted only when a verified assignment is available.
+
 ## Agent Description
 
 A multi-agent WhatsApp solution that supports expectant mothers and the Public Health
 Midwife (PHM) assigned to them. Mothers interact in natural language over WhatsApp to
-register, learn when their next antenatal or immunisation visit is due, ask general
-maternal-health questions, and report symptoms. A deterministic danger-sign screener
+register, query antenatal and child-health schedules, and report symptoms. General
+maternal-health guidance from a knowledge base is deferred. A deterministic danger-sign screener
 decides when a report must be escalated, and the system hands the case to the assigned
 PHM with the mother's context attached.
 
@@ -39,7 +45,7 @@ These are hard requirements. Any implementation that violates them is incorrect.
 
 ### Agents
 
-Build six Agent Kernel agents using the OpenAI module, with `mathru_triage` as the
+Build five Agent Kernel agents using the OpenAI module, with `mathru_triage` as the
 entry point and the rest reachable by handoff.
 
 - `mathru_triage` — entry agent. Detects intent and hands off. Handles greetings and
@@ -48,13 +54,12 @@ entry point and the rest reachable by handoff.
   (EDD) or child date of birth, assigned PHM phone number. Confirms the record back to
   the user before saving.
 - `schedule_agent` — answers questions about upcoming antenatal visits and childhood
-  immunisations for the registered mother.
+  immunisations, developmental screening, vitamin A, and micronutrient supplementation
+  for the registered mother and child.
 - `danger_sign_agent` — conducts structured symptom screening. Escalation is triggered
   inside `screen_danger_signs`, not by this agent.
-- `phm_agent` — serves a sender whose number matches a registered `phm_phone`: caseload
-  queries and escalation acknowledgement.
-- `guidance_agent` — answers general maternal and newborn care questions from the
-  knowledge base. Phase 4; see Build Order.
+- `phm_agent`: serves a sender independently approved in the operator-managed PHM
+  registry, with caseload queries and escalation acknowledgement.
 
 ### Tools
 
@@ -71,23 +76,43 @@ phone number that is a parameter is `phm_phone`, a data field the mother supplie
   registered mother's stored EDD as pure date arithmetic. Takes no parameters; the EDD is
   read from storage, never supplied by the model.
 - `compute_immunization_schedule()` — same, from the stored child date of birth.
-- `next_appointment()` — returns the single next due item and its date.
+- `compute_child_health_schedule()`: merges developmental screening, vitamin A, and
+  micronutrient supplementation calendars derived from the stored child date of birth.
+- `next_appointment()`: returns the single next due item across every applicable calendar:
+  antenatal for a pregnancy, or all four child-health schedules for a child.
 - `screen_danger_signs(symptom_text)` — matches the reported symptoms against the
   danger-sign reference table and returns matched signs, a severity of `red`, `amber`,
   or `green`, and the prescribed action string. Returns `amber` when nothing matches but
   a symptom was clearly reported. On `red` it escalates to the assigned PHM inside the
   same call; escalation is never a separate model decision.
 - `resolve_role()` — returns whether the sender is a registered mother, a registered
-  PHM, or neither, by comparing the session id against an operator-managed registry of independently verified PHM numbers and MOH areas. The
-  model never decides who is a PHM.
+  PHM, or neither. PHM authorization compares the session id against the operator registry
+  of verified numbers and MOH areas. The model never decides who is a PHM.
 - `phm_caseload()` — returns the calling PHM's registered mothers and any open
   escalations, so a PHM can query her own caseload over WhatsApp.
-- `acknowledge_escalation(escalation_id)` — marks an open escalation acknowledged.
-  PHM-side only. It sends no notification to the mother.
-- `search_guidance(query)` — retrieves passages from the knowledge base. Phase 4.
+- `acknowledge_escalation(escalation_id)`: marks an open escalation acknowledged.
+  PHM-side only. Repeated acknowledgements return an error because the escalation is
+  already closed. It sends no notification to the mother. PHM-facing results omit routing
+  identifiers and raw delivery errors.
 
 Escalation delivery itself is an internal function in `escalation.py`, called by
 `screen_danger_signs`. It is never model-callable and is not bound as a tool.
+
+### Schedule data and tool-result contract
+
+- Clinical schedules live in `data/antenatal_schedule.yaml`, `immunization_schedule.yaml`,
+  `developmental_screening.yaml`, `vitamin_a.yaml`, and `mmn_supplementation.yaml`.
+  Each carries provenance and a status; only exact `sourced` status permits dates to be used.
+- Antenatal dates are computed from stored EDD and sourced gestational weeks. Child-health
+  dates use calendar-month arithmetic from stored birth date, clamping to month end.
+- Merged results report `available_schedules` and `unavailable_schedules`. Unsourced
+  schedules contribute no visits and must be named as unavailable in the response.
+  `data_status: placeholder` and `data_warning` communicate incomplete data.
+- Relay `caveats` describing which children a schedule covers. An item with `duration_days`
+  is a period starting on its date, not a clinic appointment. The agent must describe both
+  its start and duration.
+- `next_due` is the earliest valid date on or after today, or null when none is available.
+  Missing or invalid date values are ignored.
 
 ### Danger-sign reference table
 
@@ -108,18 +133,20 @@ Escalation delivery itself is an internal function in `escalation.py`, called by
 - The WhatsApp integration uses the sender's phone number as the session identifier.
   Rely on this for per-mother conversation continuity; do not build a parallel session
   mechanism.
-- Persist mother records in a local SQLite database managed inside tool.py using the Python standard library sqlite3 module. This is tool-owned storage and is unrelated to Agent Kernel's session backend. Do not set session.type to sqlite; it is not a supported backend. Sessions stay in_memory.
+- Persist mother records and escalations in tool-owned `store.py` using standard-library
+  SQLite, with foreign keys enabled on each connection. This is separate from Agent Kernel's
+  session backend. Sessions stay `in_memory`; SQLite is not a session backend.
 - A mother must not need to re-register or restate her EDD in later conversations.
 
 ### PHM interface
 
 - The same WhatsApp deployment serves PHMs. A sender whose number is independently
-  approved in the operator-managed registry is routed to PHM capabilities: caseload queries and escalation
-  acknowledgement. Role governs access to PHM capabilities only. A PHM who is herself a
+  approved in the operator-managed registry is routed to PHM capabilities: caseload queries
+  and escalation acknowledgement. Role governs access to PHM capabilities only. A PHM who is herself a
   registered mother keeps the danger-sign path open.
 - Escalation messages to PHMs must be sent to a number that has an open messaging window
-  or an approved template. Document this constraint in `README.md`.
-
+  for the freeform messages sent by `WhatsAppOutboundAdapter`. Templates are not implemented.
+  Persist delivery failures and tell the mother to contact her PHM or nearest hospital directly.
 - Mother registration accepts a PHM only if the operator registry approves the number for
   the supplied MOH area. Assignment does not grant PHM status. Caseload access and
   acknowledgements are scoped to approved areas; delivery rechecks the assignment. Missing
@@ -129,8 +156,9 @@ Escalation delivery itself is an internal function in `escalation.py`, called by
 
 ### Guardrails
 
-- Enable Agent Kernel guardrails on the input and output paths, for moderation and
-  jailbreak checks. Do not enable guardrail PII detection: a mother legitimately types her
+- Enable scoped input moderation and jailbreak checks, and an output NSFW Text check.
+  The custom input guardrail blocks real tripwires but fails open on validation errors.
+  Agent and guardrail models are configured independently, as documented in README.md. Do not enable guardrail PII detection: a mother legitimately types her
   PHM's phone number during registration, and blocking it would break intake.
 - Redact phone numbers from log output only. Redaction must never apply to the escalation
   path, which needs the PHM's real number to deliver.
@@ -143,7 +171,8 @@ Escalation delivery itself is an internal function in `escalation.py`, called by
 ## Local Development
 
 - Provide `demo.py`, a local CLI entry point that exercises the full agent graph without
-  WhatsApp, seeded with a sample mother and a sample PHM.
+  WhatsApp, seeded with a sample mother after the operator explicitly approves the sample
+  PHM in the local registry. The CLI impersonates senders for local development only.
 - Provide `server.py`, the WhatsApp entry point using `WhatsAppInboundAdapter`,
   `WebhookRESTRequestHandler`, and `IOHandler.run(handlers=[...])` with the in-memory pipeline.
   Require the WhatsApp app secret so inbound sender identities are signature-authenticated.
@@ -167,8 +196,9 @@ Implement in this order. Each phase must run end to end before the next begins.
 2. `intake_agent`, `schedule_agent`, the two schedule tools, and SQLite persistence.
 3. `danger_sign_agent`, the reference table, internal escalation, PHM role routing,
    guardrails, and the post-execution hook.
-4. `guidance_agent` and the knowledge base. The system
-   must remain complete and coherent without it.
+4. Deferred: `guidance_agent`, `search_guidance(query)`, and a reviewed knowledge base.
+   None is implemented or registered in the current five-agent graph. The prototype must
+   remain complete and coherent without this optional phase.
 
 ## Out of Scope
 
