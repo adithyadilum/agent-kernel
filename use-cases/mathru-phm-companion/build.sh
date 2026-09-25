@@ -1,5 +1,4 @@
 #!/bin/bash
 set -euo pipefail
 
-uv venv
-uv sync --all-extras --dev
+uv sync --frozen --all-extras --dev
