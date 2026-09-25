@@ -427,6 +427,6 @@ def acknowledge_escalation(escalation_id: int) -> str:
 
     record = store.acknowledge_escalation(escalation_id, session_id)
     if record is None:
-        return _error(f"No escalation with id {escalation_id} belongs to this PHM.")
+        return _error(f"No open escalation with id {escalation_id} belongs to this PHM.")
 
     return _json({"ok": True, "acknowledged": True, "escalation": record})

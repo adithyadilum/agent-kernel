@@ -385,3 +385,13 @@ def test_child_health_schedule_tags_each_visit_with_its_programme(as_sender, mon
     kinds = [visit["kind"] for visit in result["visits"]]
 
     assert kinds == ["developmental_screening", "developmental_screening", "vitamin_a"]
+
+
+def test_repeated_acknowledgement_reports_no_open_escalation(as_sender):
+    register(MOTHER)
+    record = store.record_escalation(MOTHER, "red", [], "symptom", PHM, store.DELIVERED)
+    as_sender(PHM)
+    assert json.loads(tool.acknowledge_escalation(record["id"]))["ok"] is True
+    result = json.loads(tool.acknowledge_escalation(record["id"]))
+    assert result["ok"] is False
+    assert "No open escalation" in result["error"]

@@ -237,13 +237,15 @@ def acknowledge_escalation(escalation_id: int, phm_phone: str) -> dict[str, Any]
     """
     now = _now_iso()
     with connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE escalations SET acknowledged_at = ?
             WHERE id = ? AND phm_phone = ? AND acknowledged_at IS NULL
             """,
             (now, escalation_id, phm_phone),
         )
+        if cursor.rowcount == 0:
+            return None
         row = conn.execute(
             "SELECT * FROM escalations WHERE id = ? AND phm_phone = ?", (escalation_id, phm_phone)
         ).fetchone()

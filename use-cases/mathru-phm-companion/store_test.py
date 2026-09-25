@@ -110,3 +110,14 @@ def test_foreign_key_keeps_a_mother_with_escalations():
     store.record_escalation("94771234567", "red", [], "symptom", "94112223344", store.DELIVERED)
     with pytest.raises(sqlite3.IntegrityError), store.connect() as conn:
         conn.execute("DELETE FROM mothers WHERE session_id = ?", ("94771234567",))
+
+
+def test_acknowledgement_only_succeeds_once_and_for_the_owner():
+    store.upsert_mother("94771234567", "Nimali", "Colombo", "94112223344", edd_iso="2026-09-01")
+    record = store.record_escalation("94771234567", "red", [], "symptom", "94112223344", store.DELIVERED)
+    assert store.acknowledge_escalation(record["id"], "94119998888") is None
+    assert len(store.open_escalations_for_phm("94112223344")) == 1
+    acknowledged = store.acknowledge_escalation(record["id"], "94112223344")
+    assert acknowledged["acknowledged_at"] is not None
+    assert store.acknowledge_escalation(record["id"], "94112223344") is None
+    assert store.acknowledge_escalation(record["id"] + 1, "94112223344") is None
