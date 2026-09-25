@@ -110,6 +110,7 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(SCHEMA)
         yield conn
         conn.commit()

@@ -97,3 +97,16 @@ def test_check_constraint_rejects_both_dates():
 
 def test_get_mother_returns_none_when_not_registered():
     assert store.get_mother("94770000000") is None
+
+
+@pytest.mark.parametrize("attempt", range(2))
+def test_each_connection_rejects_orphan_escalations(attempt):
+    with pytest.raises(sqlite3.IntegrityError):
+        store.record_escalation("94770000000", "red", [], "symptom", "94112223344", store.UNDELIVERED)
+
+
+def test_foreign_key_keeps_a_mother_with_escalations():
+    store.upsert_mother("94771234567", "Nimali", "Colombo", "94112223344", edd_iso="2026-09-01")
+    store.record_escalation("94771234567", "red", [], "symptom", "94112223344", store.DELIVERED)
+    with pytest.raises(sqlite3.IntegrityError), store.connect() as conn:
+        conn.execute("DELETE FROM mothers WHERE session_id = ?", ("94771234567",))
