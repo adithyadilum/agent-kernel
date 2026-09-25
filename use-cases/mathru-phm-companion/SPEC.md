@@ -78,7 +78,7 @@ phone number that is a parameter is `phm_phone`, a data field the mother supplie
   a symptom was clearly reported. On `red` it escalates to the assigned PHM inside the
   same call; escalation is never a separate model decision.
 - `resolve_role()` — returns whether the sender is a registered mother, a registered
-  PHM, or neither, by comparing the session id against stored `phm_phone` values. The
+  PHM, or neither, by comparing the session id against an operator-managed registry of independently verified PHM numbers and MOH areas. The
   model never decides who is a PHM.
 - `phm_caseload()` — returns the calling PHM's registered mothers and any open
   escalations, so a PHM can query her own caseload over WhatsApp.
@@ -113,12 +113,19 @@ Escalation delivery itself is an internal function in `escalation.py`, called by
 
 ### PHM interface
 
-- The same WhatsApp deployment serves PHMs. A sender whose number matches a registered
-  `phm_phone` is routed to PHM capabilities: caseload queries and escalation
+- The same WhatsApp deployment serves PHMs. A sender whose number is independently
+  approved in the operator-managed registry is routed to PHM capabilities: caseload queries and escalation
   acknowledgement. Role governs access to PHM capabilities only. A PHM who is herself a
   registered mother keeps the danger-sign path open.
 - Escalation messages to PHMs must be sent to a number that has an open messaging window
   or an approved template. Document this constraint in `README.md`.
+
+- Mother registration accepts a PHM only if the operator registry approves the number for
+  the supplied MOH area. Assignment does not grant PHM status. Caseload access and
+  acknowledgements are scoped to approved areas; delivery rechecks the assignment. Missing
+  or invalid registry data denies access, and removing approval takes effect without restart.
+- Registry management is operator-only, never an agent tool. The prototype does not verify
+  individual mother-to-PHM relationships within an approved area.
 
 ### Guardrails
 

@@ -18,6 +18,7 @@ load_dotenv()
 from agentkernel.core import AgentService  # noqa: E402
 from agentkernel.openai import OpenAIModule  # noqa: E402
 
+import phm_registry  # noqa: E402
 import redaction  # noqa: E402
 import store  # noqa: E402
 from agent import AGENTS, mathru_triage_agent  # noqa: E402
@@ -45,6 +46,8 @@ def seed(session_id: str) -> None:
     The EDD is derived from today so the seeded record stays valid however long from now the
     demo is run.
     """
+    if not phm_registry.is_approved(SAMPLE_PHM_PHONE, SAMPLE_MOH_AREA):
+        raise ValueError("Approve the sample PHM in phm_registry.yaml before using --seed; see README.md.")
     edd = date.today() + timedelta(days=SAMPLE_EDD_OFFSET_DAYS)
     record = store.upsert_mother(
         session_id=session_id,

@@ -76,7 +76,7 @@ def test_registered_sender_is_a_mother(as_sender):
     assert result["may_report_symptoms"] is True
 
 
-def test_a_number_used_as_phm_phone_resolves_as_phm(as_sender):
+def test_an_operator_approved_number_resolves_as_phm(as_sender):
     register(MOTHER, phm_phone=PHM)
     as_sender(PHM)
     result = json.loads(tool.resolve_role())
@@ -395,3 +395,44 @@ def test_repeated_acknowledgement_reports_no_open_escalation(as_sender):
     result = json.loads(tool.acknowledge_escalation(record["id"]))
     assert result["ok"] is False
     assert "No open escalation" in result["error"]
+
+
+def test_a_mother_supplied_assignment_cannot_grant_phm_privileges(as_sender):
+    unapproved = "94770000009"
+    register(MOTHER, phm_phone=unapproved)
+    as_sender(unapproved)
+    assert json.loads(tool.resolve_role())["is_phm"] is False
+    assert json.loads(tool.phm_caseload())["ok"] is False
+    assert json.loads(tool.acknowledge_escalation(1))["ok"] is False
+
+
+def test_registration_requires_approval_for_the_moh_area(as_sender):
+    as_sender(MOTHER)
+    edd = (date.today() + timedelta(days=120)).isoformat()
+    for phone, area in [("94770000009", "Colombo"), (PHM, "Gampaha")]:
+        result = json.loads(tool.register_mother("Nimali", area, phone, edd_iso=edd))
+        assert result["ok"] is False
+        assert store.get_mother(MOTHER) is None
+    assert json.loads(tool.register_mother("Nimali", "Colombo", PHM, edd_iso=edd))["ok"] is True
+    assert json.loads(tool.resolve_role())["role"] == "mother"
+
+
+def test_revocation_removes_caseload_and_acknowledgement_access(as_sender, approved_registry):
+    register(MOTHER)
+    record = store.record_escalation(MOTHER, "red", [], "symptom", PHM, store.DELIVERED)
+    as_sender(PHM)
+    assert json.loads(tool.phm_caseload())["mother_count"] == 1
+    approved_registry.write_text("phms: []", encoding="utf-8")
+    assert json.loads(tool.phm_caseload())["ok"] is False
+    assert json.loads(tool.acknowledge_escalation(record["id"]))["ok"] is False
+    assert len(store.open_escalations_for_phm(PHM)) == 1
+
+
+def test_unapproved_area_records_are_not_exposed_or_acknowledged(as_sender):
+    register(MOTHER, moh_area="Gampaha")
+    record = store.record_escalation(MOTHER, "red", [], "symptom", PHM, store.DELIVERED)
+    as_sender(PHM)
+    result = json.loads(tool.phm_caseload())
+    assert result["mother_count"] == 0
+    assert result["open_escalation_count"] == 0
+    assert json.loads(tool.acknowledge_escalation(record["id"]))["ok"] is False

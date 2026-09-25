@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
+import phm_registry
 from redaction import redact_phone  # re-exported: callers have imported it from here since phase 2
 
 __all__ = [
@@ -198,10 +199,8 @@ def record_escalation(
 
 
 def is_registered_phm(phone: str) -> bool:
-    """Whether this number is the assigned PHM of at least one registered mother."""
-    with connect() as conn:
-        cursor = conn.execute("SELECT 1 FROM mothers WHERE phm_phone = ? LIMIT 1", (phone,))
-        return cursor.fetchone() is not None
+    """Whether an operator has independently approved this PHM number."""
+    return phm_registry.is_approved(phone)
 
 
 def mothers_for_phm(phm_phone: str) -> list[dict[str, Any]]:

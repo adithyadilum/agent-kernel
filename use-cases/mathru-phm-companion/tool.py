@@ -18,6 +18,7 @@ from agentkernel.core import ToolContext
 
 import danger_signs
 import escalation
+import phm_registry
 import provenance
 import schedules
 import store
@@ -114,6 +115,11 @@ def register_mother(
     phone, phone_error = validate_phm_phone(phm_phone, session_id)
     if phone_error:
         return _error(phone_error)
+
+    if not phm_registry.is_approved(phone, area):
+        return _error(
+            "That PHM is not verified for this MOH division. Please ask the service operator to verify the assignment."
+        )
 
     edd = (edd_iso or "").strip()
     dob = (child_dob_iso or "").strip()
@@ -399,8 +405,9 @@ def phm_caseload() -> str:
             "child_dob_iso": mother["child_dob_iso"],
         }
         for mother in store.mothers_for_phm(session_id)
+        if phm_registry.is_approved(session_id, mother["moh_area"])
     ]
-    escalations = store.open_escalations_for_phm(session_id)
+    escalations = _authorized_escalations(session_id)
 
     return _json(
         {
@@ -414,6 +421,15 @@ def phm_caseload() -> str:
     )
 
 
+def _authorized_escalations(phm_phone: str) -> list[dict[str, Any]]:
+    allowed_mothers = {
+        mother["session_id"]
+        for mother in store.mothers_for_phm(phm_phone)
+        if phm_registry.is_approved(phm_phone, mother["moh_area"])
+    }
+    return [item for item in store.open_escalations_for_phm(phm_phone) if item["session_id"] in allowed_mothers]
+
+
 def acknowledge_escalation(escalation_id: int) -> str:
     """Mark one of the calling PHM's open escalations as acknowledged.
 
@@ -425,6 +441,8 @@ def acknowledge_escalation(escalation_id: int) -> str:
     if not store.is_registered_phm(session_id):
         return _json(NOT_A_PHM)
 
+    if not any(item["id"] == escalation_id for item in _authorized_escalations(session_id)):
+        return _error(f"No open escalation with id {escalation_id} belongs to this PHM.")
     record = store.acknowledge_escalation(escalation_id, session_id)
     if record is None:
         return _error(f"No open escalation with id {escalation_id} belongs to this PHM.")

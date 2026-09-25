@@ -24,3 +24,6 @@ requirements*.txt
 .windsurf/rules/
 .codex/skills/
 .aider/skills/
+
+# Operator-maintained PHM identity registry
+phm_registry.yaml

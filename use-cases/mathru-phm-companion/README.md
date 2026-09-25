@@ -106,8 +106,8 @@ the same turn to contact her PHM or nearest hospital directly. Nothing implies h
 the way when it is not.
 
 **Identity comes from the channel.** No tool accepts a phone number identifying the
-sender; identity is resolved from `ToolContext.get().session.id`. Role is decided by
-lookup, not by the model. A sender cannot talk their way into another mother's records or
+sender; identity is resolved from `ToolContext.get().session.id`. PHM authorization is decided by an operator-managed registry of independently verified
+numbers and MOH areas, not by mother-supplied assignments or the model. A sender cannot talk their way into another mother's records or
 into a midwife's caseload. Role governs PHM capabilities only — a midwife who is herself
 pregnant keeps her own danger-sign path open.
 
@@ -192,6 +192,30 @@ export MATHRU_DB_PATH="./mathru.db"     # optional
 Use a permanent System User access token. The 24-hour token from the API Setup panel will
 expire mid-session.
 
+### PHM approvals
+
+Copy `phm_registry.example.yaml` to `phm_registry.yaml` (gitignored). The service operator
+must independently verify each PHM's number and MOH division before adding an entry:
+
+```yaml
+phms:
+  - phone: "94112223344"
+    moh_areas: [Colombo]
+```
+
+The number above is the local CLI demo identity. For WhatsApp, use the independently
+verified number of your participating PHM. Set `MATHRU_PHM_REGISTRY` for a different file
+location. Restrict write access to the operator; agent tools never edit this file.
+
+An absent, empty, or malformed registry grants no PHM privileges. Mother registration
+checks both number and MOH area. Caseload access, acknowledgements, and escalation delivery
+also check approvals; removing an entry takes effect on subsequent checks without restart.
+Existing assignments do not grant access on their own. Reports to an unapproved assignment
+are persisted as undelivered and the mother is directed to seek care herself.
+
+For `demo.py --seed`, explicitly add the sample approval above first. The CLI's
+`--session-id` impersonation is a local developer tool; do not expose it as a public API.
+
 ### Model and rate limits
 
 Every agent and both guardrails run one model, pinned so the SDK does not fall back to its
@@ -266,7 +290,7 @@ Then message your business number.
 
 ### End-to-end walkthrough
 
-1. From the mother's phone, send a greeting. Complete registration, giving the second
+1. Have the operator approve the participating PHM number and MOH area. From the mother's phone, send a greeting. Complete registration, giving the second
    number as the PHM. Confirm when asked.
 2. Ask when the next clinic visit is due.
 3. Report a symptom. The escalation is attempted immediately.
@@ -300,9 +324,10 @@ leaving the escalation delivery path untouched.
   reported symptom.
 - **Vitamin A has an unresolved source conflict.** Two official readings disagree on the
   interval — 6-monthly against roughly 12-monthly. The file records both.
-- **PHM assignment is free text.** A mother types her midwife's number at registration.
-  Format and self-assignment are validated, but a wrong number sends her escalation to a
-  stranger. In production this would come from the MOH division registry.
+- **PHM verification is operator-managed.** The operator independently verifies numbers and
+  MOH areas in a local registry. Mothers can only select an approved number for their area;
+  the prototype does not verify the individual mother-to-PHM relationship within that area.
+  There is no integration with an official MOH registry.
 - **Escalations include a verbatim excerpt** of the mother's own words. A midwife needs
   her phrasing to judge urgency, so this is deliberate, but it means her description
   leaves the system in plain text.

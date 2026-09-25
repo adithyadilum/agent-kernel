@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 from agentkernel.core import Config
 
+import phm_registry
 import store
 from redaction import redact_phone
 
@@ -135,6 +136,8 @@ async def escalate(
     delivery_error: str | None = None
 
     try:
+        if not phm_registry.is_approved(phm_phone, record["moh_area"]):
+            raise ValueError("Assigned PHM is not verified for this MOH division")
         await send_whatsapp(phm_phone, message)
         log.info("Escalation delivered to PHM %s", redact_phone(phm_phone))
     except Exception as exc:  # noqa: BLE001 - every delivery failure is recorded, never raised

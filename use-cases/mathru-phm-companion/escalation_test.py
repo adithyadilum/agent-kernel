@@ -164,3 +164,12 @@ def test_excerpt_collapses_whitespace():
 def test_excerpt_is_capped():
     long_text = "bleeding " * 200
     assert len(escalation.excerpt(long_text)) <= escalation.EXCERPT_MAX_CHARS
+
+
+async def test_revoked_assignment_is_not_delivered(mother, delivery_succeeds, approved_registry):
+    approved_registry.write_text("phms: []", encoding="utf-8")
+    result = await escalation.escalate(mother, "red", [], "symptom")
+    assert delivery_succeeds == []
+    assert result["delivered"] is False
+    assert result["message_for_mother"] == escalation.ESCALATION_FAILED_MESSAGE
+    assert store.open_escalations_for_phm(PHM_PHONE)[0]["delivery"] == store.UNDELIVERED
