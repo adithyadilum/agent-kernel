@@ -9,14 +9,14 @@ whatsapp:
 
 # The WhatsApp integration uses the sender's phone number as the session id, which gives
 # per-mother conversation continuity without a parallel session mechanism. Mother records
-# are persisted separately by tool-owned sqlite3 storage in tool.py (see SPEC.md phase 2);
+# are persisted separately by tool-owned sqlite3 storage in store.py (see SPEC.md phase 2);
 # sqlite is not an Agent Kernel session backend, so sessions stay in_memory.
 session:
   type: in_memory
   cache:
     size: 256
 
-# Moderation and jailbreak checks only. PII detection is deliberately OFF: a mother types
+# Input moderation/jailbreak and output NSFW Text checks. PII detection is OFF: a mother types
 # her PHM's phone number during registration, and the escalation path needs it to deliver.
 # Phone redaction happens in log output only, via the filter in redaction.py.
 # See guardrails/README.md for why the moderation categories are narrow.
