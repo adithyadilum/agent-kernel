@@ -144,8 +144,9 @@ Escalation delivery itself is an internal function in `escalation.py`, called by
 
 - Provide `demo.py`, a local CLI entry point that exercises the full agent graph without
   WhatsApp, seeded with a sample mother and a sample PHM.
-- Provide `server.py`, the WhatsApp entry point using `AgentWhatsAppRequestHandler` and
-  `RESTAPI.run([handler])`.
+- Provide `server.py`, the WhatsApp entry point using `WhatsAppInboundAdapter`,
+  `WebhookRESTRequestHandler`, and `IOHandler.run(handlers=[...])` with the in-memory pipeline.
+  Require the WhatsApp app secret so inbound sender identities are signature-authenticated.
 - Use `uv` for dependency management. Target Python 3.12.
 - Configure logging and session settings in `config.yaml`.
 - Read all secrets from environment variables. Never commit tokens or keys.

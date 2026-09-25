@@ -6,9 +6,11 @@ from dotenv import load_dotenv
 # so without this call a key kept only in .env would not be picked up.
 load_dotenv()
 
-from agentkernel.api import RESTAPI  # noqa: E402
+from agentkernel.core import Config  # noqa: E402
+from agentkernel.integration.adapter import WebhookRESTRequestHandler  # noqa: E402
 from agentkernel.openai import OpenAIModule  # noqa: E402
-from agentkernel.whatsapp import AgentWhatsAppRequestHandler  # noqa: E402
+from agentkernel.pipeline import IOHandler  # noqa: E402
+from agentkernel.whatsapp import WhatsAppInboundAdapter  # noqa: E402
 
 import redaction  # noqa: E402
 from agent import AGENTS, mathru_triage_agent  # noqa: E402
@@ -24,6 +26,12 @@ redaction.install()
 OpenAIModule(AGENTS).post_hook(mathru_triage_agent, [BlockUnsafeLanguageHook()])
 
 
+def main() -> None:
+    # PHM authorization trusts the channel sender, so unsigned webhooks cannot be accepted.
+    if not Config.get().whatsapp.app_secret:
+        raise ValueError("Set AK_WHATSAPP__APP_SECRET to authenticate WhatsApp sender identities.")
+    IOHandler.run(handlers=[WebhookRESTRequestHandler(WhatsAppInboundAdapter())])
+
+
 if __name__ == "__main__":
-    handler = AgentWhatsAppRequestHandler()
-    RESTAPI.run([handler])
+    main()

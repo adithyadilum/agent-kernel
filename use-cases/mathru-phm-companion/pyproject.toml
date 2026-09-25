@@ -5,14 +5,14 @@ description = "Agent Kernel WhatsApp companion for expectant mothers and Public 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "agentkernel[api,cli,openai,whatsapp]>=0.8.1",
+    "agentkernel[api,cli,openai,whatsapp]>=0.9.3,<0.10",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
 ]
 
 [dependency-groups]
 dev = [
-    "agentkernel[test]>=0.8.1",
+    "agentkernel[test]>=0.9.3,<0.10",
     "black>=23.0.0",
     "isort>=5.0.0",
     "mypy>=1.0.0",

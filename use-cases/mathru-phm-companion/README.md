@@ -59,10 +59,11 @@ current caseload, and acknowledge escalations to close them out.
 ### How it uses Agent Kernel
 
 - **WhatsApp integration** as the sole user interface, via
-  `AgentWhatsAppRequestHandler` and `RESTAPI`.
+  `WhatsAppInboundAdapter`, `WebhookRESTRequestHandler`, and `IOHandler`.
+  The default in-memory execution pipeline runs in the same local process.
 - **Multi-agent handoffs** through the OpenAI Agents module, with `OpenAIModule`
   registering every handoff target.
-- **Session memory** keyed on the sender's phone number. The WhatsApp handler sets
+- **Session memory** keyed on the sender's phone number. The WhatsApp adapter sets
   `Session.id` from the sender, so per-mother conversation continuity comes from the
   framework rather than a parallel mechanism.
 - **`ToolContext`** for identity resolution inside every tool.
@@ -189,6 +190,7 @@ export AK_WHATSAPP__PHONE_NUMBER_ID="meta_phone_number_id"
 export MATHRU_DB_PATH="./mathru.db"     # optional
 ```
 
+The app secret is required: webhook signatures authenticate the sender identity used for PHM access.
 Use a permanent System User access token. The 24-hour token from the API Setup panel will
 expire mid-session.
 
