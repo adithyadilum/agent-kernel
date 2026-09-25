@@ -13,6 +13,7 @@ mistake silently switch the danger-sign table from escalating everything to trus
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 SOURCED = "sourced"
 PLACEHOLDER = "placeholder"
@@ -60,11 +61,18 @@ def provenance_problems(data: dict[str, Any]) -> list[str]:
         elif TODO_MARKER in str(value):
             problems.append(f"provenance.{field} is still {TODO_MARKER}")
 
-    url = str(block.get("url") or "").lower()
+    url = str(block.get("url") or "").strip()
     if url and TODO_MARKER not in url:
-        if any(host in url for host in BANNED_HOSTS):
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").lower()
+            valid_url = parsed.scheme in ("http", "https") and parsed.username is None and parsed.password is None
+        except ValueError:
+            host = ""
+            valid_url = False
+        if any(host == banned or host.endswith("." + banned) for banned in BANNED_HOSTS):
             problems.append(f"provenance.url cites a banned re-upload host: {url}")
-        elif not any(host in url for host in ALLOWED_HOSTS):
+        elif not valid_url or not any(host == allowed or host.endswith("." + allowed) for allowed in ALLOWED_HOSTS):
             problems.append(f"provenance.url is not a {' or '.join(ALLOWED_HOSTS)} source: {url}")
 
     return problems

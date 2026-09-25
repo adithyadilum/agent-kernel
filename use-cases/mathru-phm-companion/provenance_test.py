@@ -145,3 +145,28 @@ def test_only_the_exact_string_counts_as_sourced(status):
 
 def test_the_exact_string_counts():
     assert provenance.is_sourced({"status": "sourced"}) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://gov.lk.example.com/file",
+        "https://evilgov.lk/file",
+        "https://who.int.example.com/file",
+        "https://evilwho.int/file",
+        "https://example.com/gov.lk",
+        "https://example.com/?source=who.int",
+        "https://gov.lk@example.com/file",
+        "https://example.com@who.int/file",
+        "//who.int/file",
+        "file://gov.lk/file",
+        "https://[invalid/gov.lk",
+    ],
+)
+def test_provenance_rejects_deceptive_or_malformed_source_urls(url):
+    assert provenance.provenance_problems(complete_provenance(url=url))
+
+
+@pytest.mark.parametrize("host", ["gov.lk", "epid.gov.lk", "old.epid.gov.lk", "who.int", "www.who.int", "WWW.WHO.INT"])
+def test_provenance_accepts_official_hosts_and_subdomains(host):
+    assert provenance.provenance_problems(complete_provenance(url=f"https://{host}/document")) == []
