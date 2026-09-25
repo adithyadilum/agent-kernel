@@ -1,5 +1,7 @@
 """Tests for escalation delivery, persistence, and the honesty of the mother-facing text."""
 
+from unittest.mock import Mock
+
 import pytest
 
 import escalation
@@ -29,19 +31,19 @@ def mother():
 def delivery_succeeds(monkeypatch):
     sent = []
 
-    async def fake_send(to_number, text):
-        sent.append((to_number, text))
+    async def fake_send(reply, reply_context):
+        sent.append((reply_context["to"], reply.response))
 
-    monkeypatch.setattr(escalation, "send_whatsapp", fake_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=fake_send))
     return sent
 
 
 @pytest.fixture
 def delivery_fails(monkeypatch):
-    async def fake_send(to_number, text):
+    async def fake_send(reply, reply_context):
         raise RuntimeError("24-hour customer service window is closed")
 
-    monkeypatch.setattr(escalation, "send_whatsapp", fake_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=fake_send))
 
 
 # --- delivery succeeds ------------------------------------------------------------------

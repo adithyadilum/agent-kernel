@@ -351,9 +351,9 @@ leaving the escalation delivery path untouched.
 - **The block list is not exhaustive.** Broad terms like `mg` and `dose` will produce false
   positives, which is why every block is logged with the original reply, redacted, so the
   rate is measurable.
-- **Outbound messaging is not framework-supported.** Agent Kernel exposes no public API
-  for sending a message to a third party outside a request turn, so escalation calls the
-  WhatsApp Cloud API directly. Raised upstream as a discussion.
+- **Outbound escalation uses `WhatsAppOutboundAdapter`.** Its reply context selects the
+  assigned PHM. Delivery errors still persist as undelivered and trigger the mother-facing
+  fallback; WhatsApp messaging-window restrictions still apply.
 - **Sessions are in-memory.** Conversation context resets when the server restarts.
   Mother records and escalations persist in SQLite.
 - **No knowledge base.** A retrieval layer over Ministry of Health guidance was scoped

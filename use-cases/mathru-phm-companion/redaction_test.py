@@ -6,6 +6,7 @@ escalation path would strip the number the message has to be delivered to.
 
 import io
 import logging
+from unittest.mock import Mock
 
 import pytest
 
@@ -95,10 +96,10 @@ async def test_escalation_is_delivered_to_the_real_unredacted_number(monkeypatch
     redaction.install()
     sent = []
 
-    async def fake_send(to_number, text):
-        sent.append(to_number)
+    async def fake_send(reply, reply_context):
+        sent.append(reply_context["to"])
 
-    monkeypatch.setattr(escalation, "send_whatsapp", fake_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=fake_send))
     record = store.upsert_mother(
         session_id=SESSION_ID,
         first_name="Nimali",
@@ -116,10 +117,10 @@ async def test_escalation_is_delivered_to_the_real_unredacted_number(monkeypatch
 async def test_stored_escalation_keeps_the_real_number(monkeypatch):
     redaction.install()
 
-    async def fake_send(to_number, text):
+    async def fake_send(reply, reply_context):
         return None
 
-    monkeypatch.setattr(escalation, "send_whatsapp", fake_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=fake_send))
     record = store.upsert_mother(
         session_id=SESSION_ID,
         first_name="Nimali",

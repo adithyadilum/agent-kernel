@@ -2,6 +2,7 @@
 
 import json
 from datetime import date, timedelta
+from unittest.mock import Mock
 
 import pytest
 from agentkernel.core import Session, ToolContext
@@ -43,10 +44,10 @@ def as_sender():
 
 @pytest.fixture
 def delivery_succeeds(monkeypatch):
-    async def fake_send(to_number, text):
+    async def fake_send(reply, reply_context):
         return None
 
-    monkeypatch.setattr(escalation, "send_whatsapp", fake_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=fake_send))
 
 
 def register(session_id, phm_phone=PHM, **kwargs):
@@ -179,10 +180,10 @@ def test_caseload_does_not_expose_mothers_phone_numbers(as_sender):
 
 
 async def test_caseload_counts_undelivered_escalations(as_sender, monkeypatch):
-    async def failing_send(to_number, text):
+    async def failing_send(reply, reply_context):
         raise RuntimeError("window closed")
 
-    monkeypatch.setattr(escalation, "send_whatsapp", failing_send)
+    monkeypatch.setattr(escalation, "WhatsAppOutboundAdapter", lambda: Mock(deliver=failing_send))
     register(MOTHER, phm_phone=PHM)
     as_sender(MOTHER)
     await tool.screen_danger_signs("I have heavy bleeding")

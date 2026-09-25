@@ -3,10 +3,8 @@
 Nothing here is bound as a tool. `screen_danger_signs` calls `escalate()` internally when
 its Python-side decision is `red`, so escalation is never a separate model decision.
 
-Agent Kernel exposes no public API for sending a message outside a request turn: the
-WhatsApp handler's `_send_message` is private and there is no client class. So this module
-calls the WhatsApp Cloud API directly, reading credentials from `Config.get().whatsapp`, and
-mirrors the request the handler itself builds.
+Delivery uses Agent Kernel's public WhatsAppOutboundAdapter. Its reply context explicitly
+names the assigned PHM, independently of the sender of the current request.
 
 Delivery can legitimately fail. A PHM whose 24-hour customer service window has closed
 cannot be reached with a freeform message. When that happens the escalation is still
@@ -20,8 +18,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
-from agentkernel.core import Config
+from agentkernel.core.model import AgentReplyText
+from agentkernel.whatsapp import WhatsAppOutboundAdapter
 
 import phm_registry
 import store
@@ -30,7 +28,6 @@ from redaction import redact_phone
 log = logging.getLogger("mathru.escalation")
 
 EXCERPT_MAX_CHARS = 300
-REQUEST_TIMEOUT_SECONDS = 15.0
 
 # Shown to the mother when her report was escalated and the PHM was reached.
 ESCALATION_SENT_MESSAGE = (
@@ -99,27 +96,6 @@ def build_message(record: dict[str, Any], severity: str, matched_signs: list[str
     )
 
 
-async def send_whatsapp(to_number: str, text: str) -> None:
-    """Send one WhatsApp text via the Cloud API. Raises on any failure."""
-    config = Config.get().whatsapp
-    if not config.access_token or not config.phone_number_id:
-        raise RuntimeError("WhatsApp credentials are not configured")
-
-    url = f"https://graph.facebook.com/{config.api_version or 'v24.0'}/{config.phone_number_id}/messages"
-    headers = {"Authorization": f"Bearer {config.access_token}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": text},
-    }
-
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-
-
 async def escalate(
     record: dict[str, Any], severity: str, matched_signs: list[str], symptom_text: str
 ) -> dict[str, Any]:
@@ -138,7 +114,7 @@ async def escalate(
     try:
         if not phm_registry.is_approved(phm_phone, record["moh_area"]):
             raise ValueError("Assigned PHM is not verified for this MOH division")
-        await send_whatsapp(phm_phone, message)
+        await WhatsAppOutboundAdapter().deliver(AgentReplyText(prompt="", response=message), {"to": phm_phone})
         log.info("Escalation delivered to PHM %s", redact_phone(phm_phone))
     except Exception as exc:  # noqa: BLE001 - every delivery failure is recorded, never raised
         delivery = store.UNDELIVERED
