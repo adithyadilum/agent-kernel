@@ -169,3 +169,21 @@ def test_action_strings_returns_empty_list_when_table_unreadable(monkeypatch):
 
     monkeypatch.setattr(danger_signs, "load_table", boom)
     assert danger_signs.action_strings() == []
+
+
+@pytest.mark.parametrize("keyword", [" fever", "fever ", " fever "])
+def test_padded_keywords_keep_word_boundaries(keyword, monkeypatch):
+    table = {
+        "status": "sourced",
+        "signs": [{"id": "fever", "keywords": [keyword], "severity": "red", "action": "CALL"}],
+    }
+    monkeypatch.setattr(danger_signs, "load_table", lambda: table)
+    assert danger_signs.screen("I have hayfever")["matched_signs"] == []
+    assert danger_signs.screen("I have feverish chills")["matched_signs"] == []
+    assert danger_signs.screen("I have fever")["matched_signs"] == ["fever"]
+
+
+def test_whitespace_only_keyword_does_not_match(monkeypatch):
+    table = {"status": "sourced", "signs": [{"id": "blank", "keywords": ["   "], "severity": "red", "action": "CALL"}]}
+    monkeypatch.setattr(danger_signs, "load_table", lambda: table)
+    assert danger_signs.screen("symptom")["matched_signs"] == []

@@ -85,7 +85,10 @@ def _keyword_pattern(keyword: str) -> re.Pattern[str]:
     The boundary is only applied at an edge that is actually a word character, so phrases
     ending in punctuation still match.
     """
-    escaped = re.escape(keyword.strip())
+    keyword = keyword.strip()
+    if not keyword:
+        return re.compile(r"(?!)")
+    escaped = re.escape(keyword)
     prefix = r"\b" if keyword[:1].isalnum() else ""
     suffix = r"\b" if keyword[-1:].isalnum() else ""
     return re.compile(f"{prefix}{escaped}{suffix}", re.IGNORECASE)

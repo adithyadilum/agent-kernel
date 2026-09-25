@@ -147,3 +147,32 @@ async def test_block_logs_redact_phone_numbers(hook, caplog):
 async def test_non_text_replies_are_returned_unchanged(hook):
     sentinel = object()
     assert await hook.on_run(session=None, requests=[], agent=None, agent_reply=sentinel) is sentinel
+
+
+@pytest.mark.parametrize("term", [" dose", "dose ", " dose "])
+def test_padded_block_terms_keep_word_boundaries(term, monkeypatch):
+    monkeypatch.setattr(
+        hooks,
+        "load_blocked_language",
+        lambda: {
+            "condition_terms": [],
+            "diagnosis_phrases": [],
+            "medication_terms": [term],
+        },
+    )
+    assert hooks.classify("dose")[0] == hooks.MEDICATION
+    assert hooks.classify("overdose")[0] is None
+    assert hooks.classify("doses")[0] is None
+
+
+def test_whitespace_only_block_term_does_not_block_every_reply(monkeypatch):
+    monkeypatch.setattr(
+        hooks,
+        "load_blocked_language",
+        lambda: {
+            "condition_terms": [],
+            "diagnosis_phrases": [],
+            "medication_terms": ["   "],
+        },
+    )
+    assert hooks.classify("Hello")[0] is None

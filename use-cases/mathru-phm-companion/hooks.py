@@ -63,7 +63,10 @@ def load_blocked_language() -> dict[str, list[str]]:
 
 
 def _term_pattern(term: str) -> re.Pattern[str]:
-    escaped = re.escape(term.strip())
+    term = term.strip()
+    if not term:
+        return re.compile(r"(?!)")
+    escaped = re.escape(term)
     prefix = r"\b" if term[:1].isalnum() else ""
     suffix = r"\b" if term[-1:].isalnum() else ""
     return re.compile(f"{prefix}{escaped}{suffix}", re.IGNORECASE)
