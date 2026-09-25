@@ -437,3 +437,25 @@ def test_unapproved_area_records_are_not_exposed_or_acknowledged(as_sender):
     assert result["mother_count"] == 0
     assert result["open_escalation_count"] == 0
     assert json.loads(tool.acknowledge_escalation(record["id"]))["ok"] is False
+
+
+def test_caseload_and_acknowledgement_hide_routing_and_delivery_details(as_sender):
+    register(MOTHER)
+    record = store.record_escalation(
+        MOTHER, "red", ["sign_a"], "symptom", PHM, store.UNDELIVERED, delivery_error=f"failed for {PHM}"
+    )
+    as_sender(PHM)
+    caseload = json.loads(tool.phm_caseload())
+    display = caseload["open_escalations"][0]
+    assert display["id"] == record["id"]
+    assert display["severity"] == "red"
+    assert display["excerpt"] == "symptom"
+    assert display["delivery"] == store.UNDELIVERED
+    acknowledged = json.loads(tool.acknowledge_escalation(record["id"]))
+    for result in (caseload, acknowledged):
+        encoded = json.dumps(result)
+        assert MOTHER not in encoded
+        assert PHM not in encoded
+        assert "session_id" not in encoded
+        assert "phm_phone" not in encoded
+        assert "delivery_error" not in encoded

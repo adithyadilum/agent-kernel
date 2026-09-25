@@ -128,7 +128,8 @@ simply unreachable, logging every occurrence. The built-in *output* guardrail al
 open; only the input side did not.
 
 **PII is minimised.** First name only. No NIC, no full name, no address beyond MOH
-division. Phone numbers are redacted in logs, and only in logs — redaction never touches
+division. PHM tool results omit stored routing identifiers and delivery errors. Phone numbers are
+redacted in logs, and only in logs — redaction never touches
 the escalation delivery path.
 
 ## 4. Data provenance

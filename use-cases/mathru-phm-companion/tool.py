@@ -389,6 +389,15 @@ def resolve_role() -> str:
     )
 
 
+# Only deliberate display fields reach the model. Routing identifiers and delivery errors
+# remain in storage, including when acknowledging an escalation.
+ESCALATION_DISPLAY_FIELDS = ("id", "severity", "matched_signs", "excerpt", "delivery", "created_at", "acknowledged_at")
+
+
+def _escalation_for_display(record: dict[str, Any]) -> dict[str, Any]:
+    return {key: record[key] for key in ESCALATION_DISPLAY_FIELDS}
+
+
 def phm_caseload() -> str:
     """Return the calling PHM's registered mothers and her open escalations."""
     session_id = _session_id()
@@ -407,7 +416,7 @@ def phm_caseload() -> str:
         for mother in store.mothers_for_phm(session_id)
         if phm_registry.is_approved(session_id, mother["moh_area"])
     ]
-    escalations = _authorized_escalations(session_id)
+    escalations = [_escalation_for_display(item) for item in _authorized_escalations(session_id)]
 
     return _json(
         {
@@ -447,4 +456,4 @@ def acknowledge_escalation(escalation_id: int) -> str:
     if record is None:
         return _error(f"No open escalation with id {escalation_id} belongs to this PHM.")
 
-    return _json({"ok": True, "acknowledged": True, "escalation": record})
+    return _json({"ok": True, "acknowledged": True, "escalation": _escalation_for_display(record)})
