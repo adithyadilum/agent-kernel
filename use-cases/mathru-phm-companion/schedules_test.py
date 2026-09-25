@@ -405,3 +405,15 @@ def test_child_schedule_dates_use_calendar_months():
     by_id = {visit["id"]: visit["date_iso"] for visit in calendar_data["visits"]}
     assert by_id["screening_02m"] == "2026-03-31"
     assert by_id["screening_60m"] == "2031-01-31"
+
+
+@pytest.mark.parametrize("bad_visit", [{}, {"date_iso": None}, {"date_iso": "bad"}, {"date_iso": 20260616}])
+def test_next_due_ignores_invalid_dates(bad_visit):
+    expected = {"date_iso": "2026-06-16"}
+    assert schedules.next_due([bad_visit, {"date_iso": "2026-06-17"}, expected], TODAY) == expected
+    assert schedules.next_due([bad_visit], TODAY) is None
+
+
+def test_next_due_compares_parsed_dates():
+    expected = {"date_iso": "2026-06-16"}
+    assert schedules.next_due([{"date_iso": " 2026-06-17 "}, expected], TODAY) == expected

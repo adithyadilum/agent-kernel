@@ -260,9 +260,11 @@ def mmn_supplementation_visits(child_dob_iso: str, today: date | None = None) ->
 
 
 def next_due(visits: list[dict[str, Any]], today: date | None = None) -> dict[str, Any] | None:
-    """The earliest visit falling on or after today, or None when all are in the past."""
+    """The earliest valid visit on or after today; ignore missing or malformed dates."""
     now = _today(today)
-    upcoming = [visit for visit in visits if parse_iso_date(visit["date_iso"]) >= now]  # type: ignore[operator]
-    if not upcoming:
-        return None
-    return min(upcoming, key=lambda visit: visit["date_iso"])
+    upcoming = []
+    for visit in visits:
+        visit_date = parse_iso_date(visit.get("date_iso"))
+        if visit_date is not None and visit_date >= now:
+            upcoming.append((visit_date, visit))
+    return min(upcoming, key=lambda item: item[0])[1] if upcoming else None
