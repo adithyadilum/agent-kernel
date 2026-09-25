@@ -28,3 +28,11 @@ fail-toward-escalation design would be bypassed by the safety layer.
 That is a real trade-off, not an oversight: this configuration accepts a narrower moderation
 net in exchange for never silencing a symptom report. See Known Limitations in the project
 README.
+
+## Model configuration
+
+`MATHRU_MODEL` only controls the agents. Guardrail wrapper models come from `config.yaml`
+(or `AK_GUARDRAIL__INPUT__MODEL` / `AK_GUARDRAIL__OUTPUT__MODEL`). The Jailbreak and NSFW
+Text checks each have a separate literal `config.model` in `input.json` and `output.json`.
+Change all four guardrail settings explicitly when switching the chat model; JSON does
+not interpolate environment variables. Moderation uses its own moderation service.

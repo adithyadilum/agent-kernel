@@ -20,6 +20,8 @@ session:
 # her PHM's phone number during registration, and the escalation path needs it to deliver.
 # Phone redaction happens in log output only, via the filter in redaction.py.
 # See guardrails/README.md for why the moderation categories are narrow.
+# These models are independent of MATHRU_MODEL; see README "Model and rate limits".
+# The check-specific models in guardrails/*.json must also be edited separately.
 guardrail:
   input:
     # Not the built-in `openai` type. That one fails CLOSED: any error during validation,

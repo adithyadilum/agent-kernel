@@ -221,12 +221,26 @@ For `demo.py --seed`, explicitly add the sample approval above first. The CLI's
 
 ### Model and rate limits
 
-Every agent and both guardrails run one model, pinned so the SDK does not fall back to its
-`gpt-4o` default:
+All five agents explicitly select a model. `MATHRU_MODEL` overrides **the agents only**:
 
 ```bash
-export MATHRU_MODEL="gpt-5.4-mini"      # optional; this is the default
+export MATHRU_MODEL="gpt-5.4-mini"      # optional; agent default
 ```
+
+Guardrail model settings are independent. The checked-in chat-model settings all default
+to `gpt-5.4-mini`, but changing `MATHRU_MODEL` does not update any of these:
+
+| Setting | How to override |
+|---|---|
+| Input guardrail wrapper model | `AK_GUARDRAIL__INPUT__MODEL`, or `guardrail.input.model` in `config.yaml` |
+| Output guardrail wrapper model | `AK_GUARDRAIL__OUTPUT__MODEL`, or `guardrail.output.model` in `config.yaml` |
+| Jailbreak check model | Edit `input.guardrails[].config.model` for `Jailbreak` in `guardrails/input.json` |
+| NSFW Text check model | Edit `output.guardrails[].config.model` for `NSFW Text` in `guardrails/output.json` |
+
+To use one chat model throughout, set both `AK_GUARDRAIL__*__MODEL` variables to the same
+value as `MATHRU_MODEL` and edit both JSON check models. JSON values are literal; environment
+variable placeholders are not expanded there. The Moderation check uses its own moderation
+service rather than the agent chat model.
 
 On a free-tier OpenAI account the model choice is really a **rate-limit** choice, and the
 binding constraint is requests per day, not tokens:
