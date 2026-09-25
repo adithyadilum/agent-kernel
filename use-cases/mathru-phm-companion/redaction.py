@@ -38,37 +38,40 @@ def redact_text(text: str) -> str:
 class PhoneRedactionFilter(logging.Filter):
     """Redacts phone-number-shaped digit runs from log messages and their arguments.
 
-    Attached to the root logger, this covers Agent Kernel's own loggers too. Agent Kernel
+    Applied when each record is created, this covers Agent Kernel's own loggers too. Agent Kernel
     names its session logger `ak.core.session [<session id>]`, and the session id is the
     mother's phone number, so the logger *name* is redacted as well.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_text(record.msg)
-
-        if record.args:
-            if isinstance(record.args, dict):
-                record.args = {key: self._scrub(value) for key, value in record.args.items()}
-            else:
-                record.args = tuple(self._scrub(value) for value in record.args)
-
+        record.msg = redact_text(record.getMessage())
+        record.args = ()
         record.name = redact_text(record.name)
+        if record.exc_info:
+            record.exc_text = redact_text(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = redact_text(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact_text(record.stack_info)
         return True
-
-    @staticmethod
-    def _scrub(value: object) -> object:
-        return redact_text(value) if isinstance(value, str) else value
 
 
 def install() -> None:
-    """Attach the redaction filter to the root logger and every existing handler.
+    """Redact records before any handler sees them, including non-propagating AK logs.
 
-    Filters on a logger do not apply to records propagated from child loggers, so the
-    filter is attached to the handlers as well, where it sees everything that is emitted.
+    Logging configuration can replace handlers after startup. A record factory survives
+    that reconfiguration and chains any factory installed by the host application.
     """
-    root = logging.getLogger()
+    previous_factory = logging.getLogRecordFactory()
+    if getattr(previous_factory, "_mathru_phone_redaction", False):
+        return
     redaction_filter = PhoneRedactionFilter()
-    root.addFilter(redaction_filter)
-    for handler in root.handlers:
-        handler.addFilter(redaction_filter)
+
+    def factory(*args, **kwargs):
+        record = previous_factory(*args, **kwargs)
+        redaction_filter.filter(record)
+        return record
+
+    factory._mathru_phone_redaction = True
+    logging.setLogRecordFactory(factory)
